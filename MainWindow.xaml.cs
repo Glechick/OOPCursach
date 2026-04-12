@@ -1,16 +1,14 @@
-﻿using SVMKurs.ViewModels;
-using System;
-using System.Linq;
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using SVMKurs.ViewModels;
 
-namespace SvmDemo.Views
+namespace SVMKurs
 {
     public partial class MainWindow : Window
     {
-        private MainViewModel _viewModel;
+        private readonly MainViewModel _viewModel;
 
         public MainWindow()
         {
@@ -219,7 +217,7 @@ namespace SvmDemo.Views
             CanvasPlot.Children.Add(label);
         }
 
-        private double MapX(double x) => x * 45 + 30;
-        private double MapY(double y) => 470 - y * 45;
+        private static double MapX(double x) => x * 45 + 30;
+        private static double MapY(double y) => 470 - y * 45;
     }
 }
