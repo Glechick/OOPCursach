@@ -13,6 +13,8 @@ namespace SVMKurs.Algorithms
     /// </summary>
     public class ShapeFeatureExtractor
     {
+        private const int TARGET_SIZE = 224; // Целевой размер изображения
+
         /// <summary>
         /// Извлекает признаки из изображения
         /// </summary>
@@ -25,11 +27,14 @@ namespace SVMKurs.Algorithms
             bitmap.StreamSource = ms;
             bitmap.EndInit();
 
+            // Масштабирование до 224x224
+            var resizedBitmap = ResizeImage(bitmap, TARGET_SIZE, TARGET_SIZE);
+
             // Конвертируем в формат для анализа
-            var pixels = GetPixelArray(bitmap);
+            var pixels = GetPixelArray(resizedBitmap);
 
             // Находим контур
-            var contour = FindContour(pixels, bitmap.PixelWidth, bitmap.PixelHeight);
+            var contour = FindContour(pixels, TARGET_SIZE, TARGET_SIZE);
 
             if (contour == null || contour.Count < 3)
                 return new double[] { 0, 0, 0 };
@@ -41,6 +46,37 @@ namespace SVMKurs.Algorithms
             compactness = NormalizeCompactness(compactness);
 
             return new double[] { compactness, elongation, angularity };
+        }
+
+        /// <summary>
+        /// Изменяет размер изображения
+        /// </summary>
+        private BitmapImage ResizeImage(BitmapImage source, int targetWidth, int targetHeight)
+        {
+            var visual = new DrawingVisual();
+            using (var dc = visual.RenderOpen())
+            {
+                dc.DrawImage(source, new Rect(0, 0, targetWidth, targetHeight));
+            }
+
+            var renderTarget = new RenderTargetBitmap(targetWidth, targetHeight, 96, 96, PixelFormats.Pbgra32);
+            renderTarget.Render(visual);
+
+            var bitmapImage = new BitmapImage();
+            using (var ms = new MemoryStream())
+            {
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(renderTarget));
+                encoder.Save(ms);
+
+                bitmapImage.BeginInit();
+                bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+                bitmapImage.StreamSource = ms;
+                bitmapImage.EndInit();
+                bitmapImage.Freeze();
+            }
+
+            return bitmapImage;
         }
 
         /// <summary>
@@ -57,9 +93,7 @@ namespace SVMKurs.Algorithms
             byte[] pixels = new byte[height * stride];
             bitmap.CopyPixels(pixels, stride, 0);
 
-            // Вычисляем порог (алгоритм Отсу)
-            int threshold = OtsuThreshold(pixels, width, height, stride);
-
+            // Используем разницу с белым цветом (255,255,255)
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
@@ -68,70 +102,82 @@ namespace SVMKurs.Algorithms
                     if (index + 2 >= pixels.Length)
                         continue;
 
-                    // Средняя яркость
-                    int brightness = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
-                    result[x, y] = brightness < threshold;
+                    int r = pixels[index + 2];
+                    int g = pixels[index + 1];
+                    int b = pixels[index];
+
+                    // Расстояние до белого цвета (чем больше расстояние, тем вероятнее фигура)
+                    int distanceToWhite = Math.Abs(r - 255) + Math.Abs(g - 255) + Math.Abs(b - 255);
+
+                    // Если цвет сильно отличается от белого - это фигура
+                    result[x, y] = distanceToWhite > 100;
                 }
+            }
+
+            // Отладочная информация: количество найденных пикселей фигуры
+            int foregroundCount = 0;
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    if (result[x, y])
+                        foregroundCount++;
+
+            // Если фигура не найдена, пробуем инвертировать
+            if (foregroundCount < 100)
+            {
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < width; x++)
+                        result[x, y] = !result[x, y];
+
+                foregroundCount = 0;
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < width; x++)
+                        if (result[x, y])
+                            foregroundCount++;
+            }
+
+            // Закрываем разрывы в контуре (морфологическое замыкание)
+            if (foregroundCount > 0)
+            {
+                result = CloseContour(result, width, height);
             }
 
             return result;
         }
 
         /// <summary>
-        /// Алгоритм Отсу для порога
+        /// Морфологическое замыкание для устранения разрывов в контуре
         /// </summary>
-        private int OtsuThreshold(byte[] pixels, int width, int height, int stride)
+        private bool[,] CloseContour(bool[,] binary, int width, int height)
         {
-            int[] histogram = new int[256];
+            var result = new bool[width, height];
 
+            // Копируем исходное изображение
             for (int y = 0; y < height; y++)
-            {
                 for (int x = 0; x < width; x++)
-                {
-                    int index = y * stride + x * 4;
-                    if (index + 2 >= pixels.Length)
-                        continue;
+                    result[x, y] = binary[x, y];
 
-                    int brightness = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
-                    histogram[brightness]++;
-                }
-            }
-
-            int total = width * height;
-            float sum = 0;
-            for (int i = 0; i < 256; i++)
-                sum += i * histogram[i];
-
-            float sumB = 0;
-            int wB = 0;
-            int wF = 0;
-            float varMax = 0;
-            int threshold = 0;
-
-            for (int i = 0; i < 256; i++)
+            // Заполняем маленькие разрывы (3x3 ядро)
+            for (int y = 1; y < height - 1; y++)
             {
-                wB += histogram[i];
-                if (wB == 0)
-                    continue;
-
-                wF = total - wB;
-                if (wF == 0)
-                    break;
-
-                sumB += i * histogram[i];
-                float mB = sumB / wB;
-                float mF = (sum - sumB) / wF;
-
-                float between = wB * wF * (mB - mF) * (mB - mF);
-
-                if (between > varMax)
+                for (int x = 1; x < width - 1; x++)
                 {
-                    varMax = between;
-                    threshold = i;
+                    if (!binary[x, y])
+                    {
+                        // Проверяем окружение 3x3
+                        int neighbors = 0;
+                        for (int dy = -1; dy <= 1; dy++)
+                            for (int dx = -1; dx <= 1; dx++)
+                                if (binary[x + dx, y + dy])
+                                    neighbors++;
+
+                        // Если вокруг много соседей, заполняем точку
+                        if (neighbors >= 5)
+                            result[x, y] = true;
+                    }
                 }
             }
 
-            return threshold;
+            return result;
         }
 
         /// <summary>
@@ -158,18 +204,35 @@ namespace SVMKurs.Algorithms
                 return null;
 
             var contour = new List<Point>();
+
+            // 8 направлений для движения
             int[] dx = { 1, 1, 0, -1, -1, -1, 0, 1 };
             int[] dy = { 0, 1, 1, 1, 0, -1, -1, -1 };
+
+            // Добавляем диагональные направления для лучшей связности
+            int[] dx2 = { 1, 1, 1, 0, -1, -1, -1, 0 };
+            int[] dy2 = { -1, 0, 1, 1, 1, 0, -1, -1 };
 
             int currentX = startX;
             int currentY = startY;
             int direction = 0;
+            int maxPoints = width * height;
+            int pointsCount = 0;
 
             do
             {
                 contour.Add(new Point(currentX, currentY));
+                pointsCount++;
+
+                if (pointsCount > maxPoints)
+                {
+                    System.Diagnostics.Debug.WriteLine("Превышен лимит точек контура");
+                    break;
+                }
 
                 bool found = false;
+
+                // Сначала ищем в текущем направлении и соседних
                 for (int i = 0; i < 8; i++)
                 {
                     int newDir = (direction + i) % 8;
@@ -178,6 +241,13 @@ namespace SVMKurs.Algorithms
 
                     if (nx >= 0 && nx < width && ny >= 0 && ny < height && binary[nx, ny])
                     {
+                        // Проверяем, не вернулись ли в начало (замкнули контур)
+                        if (contour.Count > 10 && Math.Abs(nx - startX) <= 2 && Math.Abs(ny - startY) <= 2)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Контур замкнут! Всего точек: {contour.Count}");
+                            return SimplifyContour(contour, 50);
+                        }
+
                         currentX = nx;
                         currentY = ny;
                         direction = (newDir + 5) % 8;
@@ -186,12 +256,43 @@ namespace SVMKurs.Algorithms
                     }
                 }
 
+                // Если не нашли в основных направлениях, пробуем диагональные
                 if (!found)
-                    break;
-                if (contour.Count > 10000)
-                    break;
+                {
+                    for (int i = 0; i < 8; i++)
+                    {
+                        int nx = currentX + dx2[i];
+                        int ny = currentY + dy2[i];
 
-            } while (Math.Abs(currentX - startX) > 1 || Math.Abs(currentY - startY) > 1);
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height && binary[nx, ny])
+                        {
+                            if (contour.Count > 10 && Math.Abs(nx - startX) <= 2 && Math.Abs(ny - startY) <= 2)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Контур замкнут! Всего точек: {contour.Count}");
+                                return SimplifyContour(contour, 50);
+                            }
+
+                            currentX = nx;
+                            currentY = ny;
+                            direction = (i + 5) % 8;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!found)
+                {
+                    break;
+                }
+
+            } while (pointsCount < maxPoints);
+
+
+            if (contour.Count < 10)
+            {
+                return null;
+            }
 
             return SimplifyContour(contour, 50);
         }

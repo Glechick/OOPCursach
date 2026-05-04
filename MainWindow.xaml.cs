@@ -5,14 +5,15 @@ namespace SVMKurs
 {
     public partial class MainWindow : Window
     {
-        private MainWindowViewModel _viewModel;
-
         public MainWindow()
         {
             InitializeComponent();
+            DataContext = new MainViewModel();
+        }
 
-            _viewModel = new MainWindowViewModel();
-            DataContext = _viewModel;
+        private void DataManagementView_Loaded(object sender, RoutedEventArgs e)
+        {
+
         }
     }
 }

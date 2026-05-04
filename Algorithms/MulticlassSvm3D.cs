@@ -5,7 +5,7 @@ using System.Linq;
 namespace SVMKurs.Algorithms
 {
     /// <summary>
-    /// Мультиклассовый классификатор на основе вашего 3D Linear SVM
+    /// Мультиклассовый классификатор на основе 3D Linear SVM
     /// Использует стратегию One-vs-One
     /// </summary>
     public class MulticlassSvm3D
