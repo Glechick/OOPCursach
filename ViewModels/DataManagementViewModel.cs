@@ -11,21 +11,44 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Accord.MachineLearning.VectorMachines;
+using Accord.Statistics.Kernels;
+using Accord.IO;
 
 namespace SVMKurs.ViewModels
 {
+    /// <summary>
+    /// ViewModel для управления данными: классами фигур, изображениями
+    /// и сохранением/загрузкой обученных моделей SVM.
+    /// </summary>
     public class DataManagementViewModel : INotifyPropertyChanged
     {
-        private ShapeFeatureExtractor _extractor;
-        private JsonStorageService _storage;
+        private readonly ShapeFeatureExtractor _extractor;
+        private readonly JsonStorageService _storage;
 
         private ObservableCollection<ShapeClass> _shapeClasses;
         private ShapeClass _selectedClass;
         private ShapeImage _selectedImage;
         private string _statusMessage;
 
+        /// <summary>
+        /// Моя SVM‑модель (реализация IClassifierModel).
+        /// </summary>
+        private IClassifierModel _mySvmModel;
+
+        /// <summary>
+        /// Accord‑модель (реализация IClassifierModel).
+        /// </summary>
+        private IClassifierModel _accordModel;
+
+        /// <summary>
+        /// Событие, вызываемое при изменении данных (классы/изображения).
+        /// </summary>
         public event Action DataChanged;
 
+        /// <summary>
+        /// Коллекция классов фигур.
+        /// </summary>
         public ObservableCollection<ShapeClass> ShapeClasses
         {
             get => _shapeClasses;
@@ -36,6 +59,12 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        public IClassifierModel GetMyModel() => _mySvmModel;
+
+
+        /// <summary>
+        /// Текущий выбранный класс.
+        /// </summary>
         public ShapeClass SelectedClass
         {
             get => _selectedClass;
@@ -46,6 +75,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Текущее выбранное изображение.
+        /// </summary>
         public ShapeImage SelectedImage
         {
             get => _selectedImage;
@@ -56,6 +88,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Статус выполнения операций.
+        /// </summary>
         public string StatusMessage
         {
             get => _statusMessage;
@@ -107,6 +142,10 @@ namespace SVMKurs.ViewModels
             get;
         }
 
+        /// <summary>
+        /// Создаёт новый экземпляр DataManagementViewModel.
+        /// Инициализирует команды и загружает сохранённые данные (если есть).
+        /// </summary>
         public DataManagementViewModel()
         {
             _extractor = new ShapeFeatureExtractor();
@@ -127,6 +166,27 @@ namespace SVMKurs.ViewModels
             LoadData();
         }
 
+        /// <summary>
+        /// Устанавливает мою SVM‑модель (после обучения).
+        /// Ожидается MulticlassSvm3D, реализующий IClassifierModel.
+        /// </summary>
+        public void SetMyModel(IClassifierModel model)
+        {
+            _mySvmModel = model;
+        }
+
+        /// <summary>
+        /// Устанавливает Accord‑модель (после обучения).
+        /// Ожидается AccordSvmWrapper, реализующий IClassifierModel.
+        /// </summary>
+        public void SetAccordModel(IClassifierModel model)
+        {
+            _accordModel = model;
+        }
+
+        /// <summary>
+        /// Добавляет новый класс фигур.
+        /// </summary>
         private void AddClass()
         {
             var dialog = new Window
@@ -169,6 +229,9 @@ namespace SVMKurs.ViewModels
             dialog.ShowDialog();
         }
 
+        /// <summary>
+        /// Удаляет выбранный класс.
+        /// </summary>
         private void DeleteClass()
         {
             if (SelectedClass != null)
@@ -184,6 +247,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Добавляет изображения в выбранный класс и извлекает признаки.
+        /// </summary>
         private async void AddImages()
         {
             var dialog = new OpenFileDialog
@@ -229,6 +295,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Удаляет выбранное изображение из выбранного класса.
+        /// </summary>
         private void DeleteImage()
         {
             if (SelectedImage != null && SelectedClass != null)
@@ -240,6 +309,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Сохраняет признаки изображений в JSON.
+        /// </summary>
         private void SaveData()
         {
             try
@@ -271,6 +343,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Загружает признаки изображений из JSON.
+        /// </summary>
         private void LoadData()
         {
             try
@@ -312,20 +387,57 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Сохраняет мою SVM‑модель в файл
+        /// </summary>
         private void SaveMyModel()
         {
             var dialog = new SaveFileDialog
             {
-                Filter = "SVM Model (*.svm)|*.svm",
-                DefaultExt = "svm",
-                FileName = $"mysvm_model_{DateTime.Now:yyyyMMdd_HHmmss}.svm"
+                Filter = "My SVM (*.mysvm)|*.mysvm",
+                DefaultExt = "mysvm",
+                FileName = $"my_svm_{DateTime.Now:yyyyMMdd_HHmmss}.mysvm"
             };
+
             if (dialog.ShowDialog() == true)
             {
-                StatusMessage = $"✅ Модель (мой SVM) сохранена: {dialog.FileName}";
+                try
+                {
+                    if (_mySvmModel == null || !_mySvmModel.IsTrained)
+                    {
+                        StatusMessage = "⚠️ Моя модель не обучена.";
+                        return;
+                    }
+
+                    var concrete = _mySvmModel as MulticlassSvm3D;
+                    if (concrete == null)
+                    {
+                        StatusMessage = "❌ Тип модели неверный.";
+                        return;
+                    }
+
+                    var data = concrete.ToData();
+
+                    var json = System.Text.Json.JsonSerializer.Serialize(
+                        data,
+                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
+                    );
+
+                    File.WriteAllText(dialog.FileName, json);
+
+                    StatusMessage = $"✅ Моя модель сохранена: {dialog.FileName}";
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"❌ Ошибка сохранения: {ex.Message}";
+                }
             }
         }
 
+
+        /// <summary>
+        /// Сохраняет Accord‑модель в файл 
+        /// </summary>
         private void SaveAccordModel()
         {
             var dialog = new SaveFileDialog
@@ -334,25 +446,69 @@ namespace SVMKurs.ViewModels
                 DefaultExt = "accord",
                 FileName = $"accord_model_{DateTime.Now:yyyyMMdd_HHmmss}.accord"
             };
+
             if (dialog.ShowDialog() == true)
             {
-                StatusMessage = $"✅ Модель (Accord) сохранена: {dialog.FileName}";
+                try
+                {
+                    if (_accordModel == null || !_accordModel.IsTrained)
+                    {
+                        StatusMessage = "⚠️ Модель Accord Нельзя сохранить.";
+                        return;
+                    }
+
+                    var wrapper = _accordModel as AccordSvmWrapper;
+
+                    var raw = wrapper.GetRawModel();
+
+                    Serializer.Save(raw, dialog.FileName);
+
+                    StatusMessage = $"✅ Модель (Accord) сохранена: {dialog.FileName}";
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"❌ Ошибка сохранения Accord: {ex.Message}";
+                }
             }
         }
 
+        /// <summary>
+        /// Загружает мою SVM‑модель из файла.
+        /// </summary>
         private void LoadMyModel()
         {
             var dialog = new OpenFileDialog
             {
-                Filter = "SVM Model (*.svm)|*.svm",
-                Title = "Загрузить модель (мой SVM)"
+                Filter = "My SVM (*.mysvm)|*.mysvm",
+                Title = "Загрузить мою модель"
             };
+
             if (dialog.ShowDialog() == true)
             {
-                StatusMessage = $"✅ Модель (мой SVM) загружена: {dialog.FileName}";
+                try
+                {
+                    var json = File.ReadAllText(dialog.FileName);
+                    var data = System.Text.Json.JsonSerializer.Deserialize<SvmModelData>(json);
+
+                    var model = new MulticlassSvm3D();
+                    model.LoadFromData(data);
+
+                    _mySvmModel = model;
+
+                    StatusMessage = $"✅ Моя модель загружена: {dialog.FileName}";
+                    DataChanged?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"❌ Ошибка загрузки: {ex.Message}";
+                }
             }
         }
 
+
+        /// <summary>
+        /// Загружает Accord‑модель из файла.
+        /// </summary>
         private void LoadAccordModel()
         {
             var dialog = new OpenFileDialog
@@ -360,9 +516,22 @@ namespace SVMKurs.ViewModels
                 Filter = "Accord Model (*.accord)|*.accord",
                 Title = "Загрузить модель (Accord)"
             };
+
             if (dialog.ShowDialog() == true)
             {
-                StatusMessage = $"✅ Модель (Accord) загружена: {dialog.FileName}";
+                try
+                {
+                    var raw = Serializer.Load<MulticlassSupportVectorMachine<Linear>>(dialog.FileName);
+                    var wrapper = new AccordSvmWrapper();
+                    wrapper.SetRawModel(raw);
+                    _accordModel = wrapper;
+
+                    StatusMessage = $"✅ Модель (Accord) загружена: {dialog.FileName}";
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"❌ Ошибка загрузки Accord: {ex.Message}";
+                }
             }
         }
 

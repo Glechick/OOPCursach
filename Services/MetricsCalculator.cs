@@ -2,112 +2,187 @@
 using System.Collections.Generic;
 using System.Linq;
 using SVMKurs.Models;
-using SVMKurs.Algorithms;
 
 namespace SVMKurs.Services
 {
     /// <summary>
-    /// Расчётчик метрик качества классификации
+    /// Вычисляет метрики качества классификации, включая ROC-кривые и AUC.
+    /// Поддерживает бинарную и многоклассовую классификацию.
     /// </summary>
     public static class MetricsCalculator
     {
         /// <summary>
-        /// Рассчитывает все метрики для обученной модели
+        /// Выполняет полный расчёт метрик по истинным меткам, предсказанным меткам и вероятностям.
         /// </summary>
-        public static Metrics Calculate(MulticlassSvm3D model, List<MulticlassPoint3D> testSamples, string algorithmName)
+        public static Metrics Calculate(
+            int[] trueLabels,
+            double[][] predictedProbabilities,
+            int[] predictedLabels,
+            int classCount)
         {
             var metrics = new Metrics();
-            int numClasses = testSamples.Select(s => s.Label).Distinct().Count();
 
-            var confusion = new int[numClasses][];
-            for (int i = 0; i < numClasses; i++)
-                confusion[i] = new int[numClasses];
+            metrics.Accuracy = trueLabels.Zip(predictedLabels, (t, p) => t == p ? 1.0 : 0.0).Average();
+            metrics.ConfusionMatrix = BuildConfusionMatrix(trueLabels, predictedLabels, classCount);
 
-            foreach (var sample in testSamples)
+            metrics.ClassPrecision = new double[classCount];
+            metrics.ClassRecall = new double[classCount];
+            metrics.ClassF1 = new double[classCount];
+
+            for (int c = 0; c < classCount; c++)
             {
-                var result = model.Predict(sample.X, sample.Y, sample.Z);
-                confusion[sample.Label][result.PredictedClass]++;
-            }
+                int tp = metrics.ConfusionMatrix[c][c];
+                int fp = Enumerable.Range(0, classCount).Where(i => i != c).Sum(i => metrics.ConfusionMatrix[i][c]);
+                int fn = Enumerable.Range(0, classCount).Where(i => i != c).Sum(i => metrics.ConfusionMatrix[c][i]);
 
-            metrics.ConfusionMatrix = confusion;
+                metrics.ClassPrecision[c] = tp + fp == 0 ? 0 : (double)tp / (tp + fp);
+                metrics.ClassRecall[c] = tp + fn == 0 ? 0 : (double)tp / (tp + fn);
 
-            metrics.ClassPrecision = new double[numClasses];
-            metrics.ClassRecall = new double[numClasses];
-            metrics.ClassF1 = new double[numClasses];
-
-            for (int i = 0; i < numClasses; i++)
-            {
-                int tp = confusion[i][i];
-                int fp = 0, fn = 0;
-                for (int j = 0; j < numClasses; j++)
-                {
-                    if (j != i)
-                        fp += confusion[j][i];
-                    if (j != i)
-                        fn += confusion[i][j];
-                }
-
-                metrics.ClassPrecision[i] = tp + fp > 0 ? (double)tp / (tp + fp) : 0;
-                metrics.ClassRecall[i] = tp + fn > 0 ? (double)tp / (tp + fn) : 0;
-                metrics.ClassF1[i] = metrics.ClassPrecision[i] + metrics.ClassRecall[i] > 0
-                    ? 2 * metrics.ClassPrecision[i] * metrics.ClassRecall[i] / (metrics.ClassPrecision[i] + metrics.ClassRecall[i])
-                    : 0;
+                metrics.ClassF1[c] = (metrics.ClassPrecision[c] + metrics.ClassRecall[c]) == 0
+                    ? 0
+                    : 2 * metrics.ClassPrecision[c] * metrics.ClassRecall[c] /
+                      (metrics.ClassPrecision[c] + metrics.ClassRecall[c]);
             }
 
             metrics.Precision = metrics.ClassPrecision.Average();
             metrics.Recall = metrics.ClassRecall.Average();
             metrics.F1Score = metrics.ClassF1.Average();
 
-            int correct = 0;
-            for (int i = 0; i < numClasses; i++)
-                correct += confusion[i][i];
-            metrics.Accuracy = (double)correct / testSamples.Count;
+            metrics.RocCurves = new Dictionary<int, List<(double fpr, double tpr)>>();
+
+            for (int c = 0; c < classCount; c++)
+                metrics.RocCurves[c] = ComputeRocForClass(trueLabels, predictedProbabilities, c);
+
+            metrics.RocMacro = ComputeMacroRoc(metrics.RocCurves, classCount);
+            metrics.MacroAuc = ComputeAuc(metrics.RocMacro);
+            metrics.MicroAuc = ComputeMicroAuc(trueLabels, predictedProbabilities, classCount);
 
             return metrics;
         }
 
         /// <summary>
-        /// Рассчитывает ROC-кривую для бинарной классификации
+        /// Формирует матрицу ошибок.
         /// </summary>
-        public static List<RocPoint> CalculateRocCurve(List<(int True, int Predicted, double Score)> results, int numClasses)
+        private static int[][] BuildConfusionMatrix(int[] trueLabels, int[] predictedLabels, int classCount)
         {
-            var rocPoints = new List<RocPoint>();
-            var sorted = results.OrderByDescending(r => r.Score).ToList();
-            int totalPos = results.Count(r => r.True == 1);
-            int totalNeg = results.Count(r => r.True == 0);
+            var matrix = new int[classCount][];
+            for (int i = 0; i < classCount; i++)
+                matrix[i] = new int[classCount];
 
-            int tp = 0, fp = 0;
-            foreach (var r in sorted)
-            {
-                if (r.True == 1)
-                    tp++;
-                else
-                    fp++;
+            for (int i = 0; i < trueLabels.Length; i++)
+                matrix[trueLabels[i]][predictedLabels[i]]++;
 
-                double tpr = totalPos > 0 ? (double)tp / totalPos : 0;
-                double fpr = totalNeg > 0 ? (double)fp / totalNeg : 0;
-
-                rocPoints.Add(new RocPoint { Fpr = fpr, Tpr = tpr, Threshold = r.Score });
-            }
-
-            return rocPoints;
+            return matrix;
         }
 
         /// <summary>
-        /// Вычисляет площадь под ROC-кривой (AUC)
+        /// Строит ROC-кривую для одного класса.
         /// </summary>
-        public static double CalculateAuc(List<RocPoint> rocPoints)
+        private static List<(double fpr, double tpr)> ComputeRocForClass(
+            int[] trueLabels,
+            double[][] predictedProbabilities,
+            int classId)
         {
-            if (rocPoints.Count < 2)
-                return 0.5;
+            var scores = predictedProbabilities.Select(p => p[classId]).ToArray();
+            var labels = trueLabels.Select(t => t == classId ? 1 : 0).ToArray();
 
-            double auc = 0;
-            for (int i = 1; i < rocPoints.Count; i++)
+            var thresholds = scores.Distinct().OrderByDescending(x => x).ToList();
+            var roc = new List<(double fpr, double tpr)>();
+
+            foreach (var th in thresholds)
             {
-                auc += (rocPoints[i].Fpr - rocPoints[i - 1].Fpr) *
-                       (rocPoints[i].Tpr + rocPoints[i - 1].Tpr) / 2;
+                int tp = 0, fp = 0, tn = 0, fn = 0;
+
+                for (int i = 0; i < scores.Length; i++)
+                {
+                    int predicted = scores[i] >= th ? 1 : 0;
+
+                    if (predicted == 1 && labels[i] == 1)
+                        tp++;
+                    else if (predicted == 1 && labels[i] == 0)
+                        fp++;
+                    else if (predicted == 0 && labels[i] == 0)
+                        tn++;
+                    else
+                        fn++;
+                }
+
+                double tpr = tp + fn == 0 ? 0 : (double)tp / (tp + fn);
+                double fpr = fp + tn == 0 ? 0 : (double)fp / (fp + tn);
+
+                roc.Add((fpr, tpr));
             }
+
+            roc.Add((0, 0));
+            roc.Add((1, 1));
+
+            return roc.OrderBy(p => p.fpr).ToList();
+        }
+
+        /// <summary>
+        /// Вычисляет усреднённую (macro) ROC-кривую.
+        /// </summary>
+        private static List<(double fpr, double tpr)> ComputeMacroRoc(
+            Dictionary<int, List<(double fpr, double tpr)>> curves,
+            int classCount)
+        {
+            var macro = new List<(double fpr, double tpr)>();
+            var allFpr = curves.Values.SelectMany(c => c.Select(p => p.fpr)).Distinct().OrderBy(x => x);
+
+            foreach (var fpr in allFpr)
+            {
+                double avgTpr = curves.Values
+                    .Select(curve => curve.OrderBy(p => Math.Abs(p.fpr - fpr)).First().tpr)
+                    .Average();
+
+                macro.Add((fpr, avgTpr));
+            }
+
+            return macro;
+        }
+
+        /// <summary>
+        /// Вычисляет площадь под ROC-кривой (AUC).
+        /// </summary>
+        private static double ComputeAuc(List<(double fpr, double tpr)> roc)
+        {
+            double auc = 0;
+
+            for (int i = 1; i < roc.Count; i++)
+            {
+                double x1 = roc[i - 1].fpr;
+                double x2 = roc[i].fpr;
+                double y1 = roc[i - 1].tpr;
+                double y2 = roc[i].tpr;
+
+                auc += (x2 - x1) * (y1 + y2) / 2.0;
+            }
+
             return auc;
+        }
+
+        /// <summary>
+        /// Вычисляет micro-AUC по всем классам.
+        /// </summary>
+        private static double ComputeMicroAuc(
+            int[] trueLabels,
+            double[][] predictedProbabilities,
+            int classCount)
+        {
+            var allScores = new List<double>();
+            var allLabels = new List<int>();
+
+            for (int i = 0; i < trueLabels.Length; i++)
+            {
+                for (int c = 0; c < classCount; c++)
+                {
+                    allScores.Add(predictedProbabilities[i][c]);
+                    allLabels.Add(trueLabels[i] == c ? 1 : 0);
+                }
+            }
+
+            var roc = ComputeRocForClass(allLabels.ToArray(), allScores.Select(s => new[] { s }).ToArray(), 0);
+            return ComputeAuc(roc);
         }
     }
 }

@@ -5,154 +5,180 @@ using System.Linq;
 namespace SVMKurs.Algorithms
 {
     /// <summary>
-    /// SMO алгоритм для обучения 3D Linear SVM
+    /// Обучение линейного SVM методом SMO.
+    /// Работает только с метками -1 и +1.
     /// </summary>
     public class SvmTrainer3D
     {
-        private readonly LinearSvm3D _svm;
+        private readonly double C;          // Параметр регуляризации
+        private readonly double Tolerance;  // Допуск для условий KKT
+        private readonly double Epsilon;    // Минимальное изменение альфы
 
-        public SvmTrainer3D(LinearSvm3D svm)
+        public SvmTrainer3D(double c = 1.0, double tolerance = 1e-3, double epsilon = 1e-3)
         {
-            _svm = svm;
+            C = c;
+            Tolerance = tolerance;
+            Epsilon = epsilon;
         }
 
         /// <summary>
-        /// Обучение SVM на 3D точках
+        /// Обучает линейный SVM и возвращает готовую модель.
         /// </summary>
-        /// <param name="points">Точки для обучения (бинарная классификация)</param>
-        /// <param name="C">Параметр регуляризации (штраф за ошибки)</param>
-        /// <param name="maxIterations">Максимальное количество итераций</param>
-        public void Train(List<Point3D> points, double C = 1.0, int maxIterations = 100)
+        public LinearSvm3D Train(List<Point3D> points)
         {
-            if (points.Count < 2)
-                throw new ArgumentException("Нужно минимум 2 точки для обучения");
-
-            // Проверяем, что есть оба класса
-            var uniqueLabels = points.Select(p => p.Label).Distinct().ToList();
-            if (uniqueLabels.Count != 2)
-                throw new ArgumentException($"Нужны оба класса (-1 и 1), а найдено: {string.Join(", ", uniqueLabels)}");
+            if (points == null || points.Count == 0)
+                throw new ArgumentException("Набор данных пуст.");
 
             int n = points.Count;
-            double[][] data = points.Select(p => p.ToArray()).ToArray();
-            int[] labels = points.Select(p => p.Label).ToArray();
 
-            double[] alphas = new double[n];
-            double bias = 0;
-            var random = new Random();
+            // Альфы
+            double[] alpha = new double[n];
 
-            for (int iter = 0; iter < maxIterations; iter++)
+            // Смещение
+            double b = 0;
+
+            // Ошибки E_i = f(x_i) - y_i
+            double[] errors = new double[n];
+
+            // Предварительно вычисляем скалярные произведения (линейное ядро)
+            double[,] kernel = new double[n, n];
+            for (int i = 0; i < n; i++)
             {
-                double alphaChanged = 0;
+                var a = points[i].ToArray();
+                for (int j = 0; j < n; j++)
+                {
+                    var b2 = points[j].ToArray();
+                    kernel[i, j] = a[0] * b2[0] + a[1] * b2[1] + a[2] * b2[2];
+                }
+            }
+
+            bool changed;
+            int passes = 0;
+            int maxPasses = 10;
+
+            // Основной цикл SMO
+            do
+            {
+                changed = false;
 
                 for (int i = 0; i < n; i++)
                 {
-                    double error_i = GetError(i, data, labels, alphas, bias);
+                    double Ei = ComputeError(i);
 
-                    // Проверяем условия ККТ
-                    bool condition1 = labels[i] * error_i < -1e-5 && alphas[i] < C;
-                    bool condition2 = labels[i] * error_i > 1e-5 && alphas[i] > 0;
+                    // Проверка условий KKT
+                    bool violatesKKT =
+                        (points[i].Label * Ei < -Tolerance && alpha[i] < C) ||
+                        (points[i].Label * Ei > Tolerance && alpha[i] > 0);
 
-                    if (condition1 || condition2)
+                    if (!violatesKKT)
+                        continue;
+
+                    // Выбираем j != i
+                    int j = SelectSecondIndex(i, n);
+                    double Ej = ComputeError(j);
+
+                    double alpha_i_old = alpha[i];
+                    double alpha_j_old = alpha[j];
+
+                    int yi = points[i].Label;
+                    int yj = points[j].Label;
+
+                    // Вычисляем границы L и H
+                    double L, H;
+                    if (yi != yj)
                     {
-                        // Выбираем вторую точку случайно
-                        int j = random.Next(n);
-                        while (j == i)
-                            j = random.Next(n);
-
-                        double error_j = GetError(j, data, labels, alphas, bias);
-
-                        double alpha_i_old = alphas[i];
-                        double alpha_j_old = alphas[j];
-
-                        // Вычисляем границы L и H
-                        double L, H;
-                        if (labels[i] != labels[j])
-                        {
-                            L = Math.Max(0, alphas[j] - alphas[i]);
-                            H = Math.Min(C, C + alphas[j] - alphas[i]);
-                        }
-                        else
-                        {
-                            L = Math.Max(0, alphas[i] + alphas[j] - C);
-                            H = Math.Min(C, alphas[i] + alphas[j]);
-                        }
-
-                        if (Math.Abs(L - H) < 1e-10)
-                            continue;
-
-                        // Вычисляем eta для 3D
-                        double eta = 2 * Kernel(data[i], data[j]) -
-                                     Kernel(data[i], data[i]) -
-                                     Kernel(data[j], data[j]);
-
-                        if (eta >= 0)
-                            continue;
-
-                        // Обновляем alpha_j
-                        alphas[j] = alpha_j_old - (labels[j] * (error_i - error_j)) / eta;
-                        alphas[j] = Math.Min(H, Math.Max(L, alphas[j]));
-
-                        if (Math.Abs(alphas[j] - alpha_j_old) < 1e-10)
-                            continue;
-
-                        // Обновляем alpha_i
-                        alphas[i] = alpha_i_old + labels[i] * labels[j] * (alpha_j_old - alphas[j]);
-
-                        // Обновляем bias
-                        double b1 = bias - error_i -
-                                   labels[i] * (alphas[i] - alpha_i_old) * Kernel(data[i], data[i]) -
-                                   labels[j] * (alphas[j] - alpha_j_old) * Kernel(data[i], data[j]);
-
-                        double b2 = bias - error_j -
-                                   labels[i] * (alphas[i] - alpha_i_old) * Kernel(data[i], data[j]) -
-                                   labels[j] * (alphas[j] - alpha_j_old) * Kernel(data[j], data[j]);
-
-                        bias = (b1 + b2) / 2;
-                        alphaChanged++;
+                        L = Math.Max(0, alpha[j] - alpha[i]);
+                        H = Math.Min(C, C + alpha[j] - alpha[i]);
                     }
+                    else
+                    {
+                        L = Math.Max(0, alpha[i] + alpha[j] - C);
+                        H = Math.Min(C, alpha[i] + alpha[j]);
+                    }
+
+                    if (Math.Abs(L - H) < 1e-12)
+                        continue;
+
+                    // Вычисляем η
+                    double eta = 2 * kernel[i, j] - kernel[i, i] - kernel[j, j];
+                    if (eta >= 0)
+                        continue;
+
+                    // Обновляем α_j
+                    alpha[j] -= yj * (Ei - Ej) / eta;
+
+                    // Ограничиваем α_j
+                    if (alpha[j] > H)
+                        alpha[j] = H;
+                    else if (alpha[j] < L)
+                        alpha[j] = L;
+
+                    if (Math.Abs(alpha[j] - alpha_j_old) < Epsilon)
+                        continue;
+
+                    // Обновляем α_i
+                    alpha[i] += yi * yj * (alpha_j_old - alpha[j]);
+
+                    // Обновляем bias
+                    double b1 = b - Ei
+                        - yi * (alpha[i] - alpha_i_old) * kernel[i, i]
+                        - yj * (alpha[j] - alpha_j_old) * kernel[i, j];
+
+                    double b2 = b - Ej
+                        - yi * (alpha[i] - alpha_i_old) * kernel[i, j]
+                        - yj * (alpha[j] - alpha_j_old) * kernel[j, j];
+
+                    if (alpha[i] > 0 && alpha[i] < C)
+                        b = b1;
+                    else if (alpha[j] > 0 && alpha[j] < C)
+                        b = b2;
+                    else
+                        b = (b1 + b2) / 2.0;
+
+                    changed = true;
                 }
 
-                if (alphaChanged < 1e-5)
-                    break;
-            }
+                passes = changed ? 0 : passes + 1;
 
-            // Вычисляем веса для 3D
-            double w0 = 0, w1 = 0, w2 = 0;
+            } while (passes < maxPasses);
+
+            // Формируем список опорных векторов
+            var sv = new List<SupportVector3D>();
             for (int i = 0; i < n; i++)
             {
-                if (alphas[i] > 1e-7)
+                if (alpha[i] > 1e-6)
                 {
-                    w0 += alphas[i] * labels[i] * data[i][0];
-                    w1 += alphas[i] * labels[i] * data[i][1];
-                    w2 += alphas[i] * labels[i] * data[i][2];
-
-                    // Сохраняем опорные векторы
-                    _svm.AddSupportVector(data[i][0], data[i][1], data[i][2], labels[i]);
+                    var p = points[i];
+                    sv.Add(new SupportVector3D(p.X, p.Y, p.Z, p.Label, alpha[i]));
                 }
             }
 
-            _svm.SetWeights(w0, w1, w2, bias);
-        }
+            // Создаём модель
+            var model = new LinearSvm3D();
+            model.SetModel(sv, b);
 
-        /// <summary>
-        /// Линейное ядро для 3D: K(v1, v2) = x1*x2 + y1*y2 + z1*z2
-        /// </summary>
-        private double Kernel(double[] v1, double[] v2)
-        {
-            return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
-        }
+            return model;
 
-        /// <summary>
-        /// Вычисление ошибки для точки i
-        /// </summary>
-        private double GetError(int i, double[][] data, int[] labels, double[] alphas, double bias)
-        {
-            double sum = 0;
-            for (int j = 0; j < data.Length; j++)
+            // Локальные функции
+
+            double ComputeError(int idx)
             {
-                sum += alphas[j] * labels[j] * Kernel(data[j], data[i]);
+                double sum = 0;
+                for (int k = 0; k < n; k++)
+                    sum += alpha[k] * points[k].Label * kernel[k, idx];
+                return sum + b - points[idx].Label;
             }
-            return sum + bias - labels[i];
+
+            int SelectSecondIndex(int i, int total)
+            {
+                Random rnd = new Random();
+                int j;
+                do
+                {
+                    j = rnd.Next(total);
+                } while (j == i);
+                return j;
+            }
         }
     }
 }

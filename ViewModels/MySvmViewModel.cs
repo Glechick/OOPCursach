@@ -1,40 +1,56 @@
-﻿using System;
+﻿using OxyPlot;
+using OxyPlot.Series;
+using OxyPlot.Axes;
+using SVMKurs.Algorithms;
+using SVMKurs.Models;
+using SVMKurs.Services;
+using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using SVMKurs.Algorithms;
-using SVMKurs.Models;
-using SVMKurs.Services;
+using System.Collections.ObjectModel;
 
 namespace SVMKurs.ViewModels
 {
+    /// <summary>
+    /// ViewModel пользовательской реализации SVM.
+    /// Обеспечивает обучение, расчёт метрик, построение ROC-кривой
+    /// и управление параметрами алгоритма.
+    /// </summary>
     public class MySvmViewModel : INotifyPropertyChanged
     {
         private MulticlassSvm3D _model;
         private TrainingConfiguration _config;
 
-        private List<MulticlassPoint3D> _allPoints;
-        private List<MulticlassPoint3D> _trainPoints;
-        private List<MulticlassPoint3D> _testPoints;
+        private List<(double x, double y, double z, int label)> _allPoints;
+        private List<(double x, double y, double z, int label)> _trainPoints;
+        private List<(double x, double y, double z, int label)> _testPoints;
+
         private Dictionary<int, string> _classNames;
 
         private int _trainPercentage = 70;
         private int _trainCount;
         private int _testCount;
         private int _totalCount;
+
+        private string _statusMessage;
+
         private double _accuracy;
         private double _precision;
         private double _recall;
         private double _f1Score;
-        private string _statusMessage;
-        private List<RocPoint> _rocPoints;
+        private double _macroAuc;
+
+        private PlotModel _rocPlotModel;
 
         public event Action TrainingCompleted;
-        public event Action<List<RocPoint>> RequestDrawRoc;
+        public event PropertyChangedEventHandler PropertyChanged;
 
+        /// <summary>
+        /// Конфигурация обучения SVM.
+        /// </summary>
         public TrainingConfiguration Config
         {
             get => _config;
@@ -45,6 +61,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Процент обучающей выборки.
+        /// </summary>
         public int TrainPercentage
         {
             get => _trainPercentage;
@@ -53,13 +72,18 @@ namespace SVMKurs.ViewModels
                 _trainPercentage = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(TestPercentage));
-                UpdateCounts();
-                ApplySplit();
+                UpdateSplit();
             }
         }
 
-        public int TestPercentage => 100 - _trainPercentage;
+        /// <summary>
+        /// Процент тестовой выборки.
+        /// </summary>
+        public int TestPercentage => 100 - TrainPercentage;
 
+        /// <summary>
+        /// Количество обучающих объектов.
+        /// </summary>
         public int TrainCount
         {
             get => _trainCount;
@@ -70,6 +94,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Количество тестовых объектов.
+        /// </summary>
         public int TestCount
         {
             get => _testCount;
@@ -80,6 +107,9 @@ namespace SVMKurs.ViewModels
             }
         }
 
+        /// <summary>
+        /// Общее количество объектов.
+        /// </summary>
         public int TotalCount
         {
             get => _totalCount;
@@ -90,46 +120,25 @@ namespace SVMKurs.ViewModels
             }
         }
 
-        public double Accuracy
+        /// <summary>
+        /// Список типов Margin.
+        /// </summary>
+        public ObservableCollection<string> MarginTypes
         {
-            get => _accuracy;
-            set
-            {
-                _accuracy = value;
-                OnPropertyChanged();
-            }
+            get; set;
         }
 
-        public double Precision
+        /// <summary>
+        /// Список функций потерь.
+        /// </summary>
+        public ObservableCollection<string> LossFunctions
         {
-            get => _precision;
-            set
-            {
-                _precision = value;
-                OnPropertyChanged();
-            }
+            get; set;
         }
 
-        public double Recall
-        {
-            get => _recall;
-            set
-            {
-                _recall = value;
-                OnPropertyChanged();
-            }
-        }
-
-        public double F1Score
-        {
-            get => _f1Score;
-            set
-            {
-                _f1Score = value;
-                OnPropertyChanged();
-            }
-        }
-
+        /// <summary>
+        /// Сообщение о состоянии обучения.
+        /// </summary>
         public string StatusMessage
         {
             get => _statusMessage;
@@ -140,34 +149,101 @@ namespace SVMKurs.ViewModels
             }
         }
 
-        public List<RocPoint> RocPoints
+        /// <summary>
+        /// Точность.
+        /// </summary>
+        public double Accuracy
         {
-            get => _rocPoints;
+            get => _accuracy;
             set
             {
-                _rocPoints = value;
+                _accuracy = value;
                 OnPropertyChanged();
             }
         }
 
+        /// <summary>
+        /// Precision.
+        /// </summary>
+        public double Precision
+        {
+            get => _precision;
+            set
+            {
+                _precision = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Recall.
+        /// </summary>
+        public double Recall
+        {
+            get => _recall;
+            set
+            {
+                _recall = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// F1 Score.
+        /// </summary>
+        public double F1Score
+        {
+            get => _f1Score;
+            set
+            {
+                _f1Score = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Macro AUC.
+        /// </summary>
+        public double MacroAuc
+        {
+            get => _macroAuc;
+            set
+            {
+                _macroAuc = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// ROC-кривая.
+        /// </summary>
+        public PlotModel RocPlotModel
+        {
+            get => _rocPlotModel;
+            set
+            {
+                _rocPlotModel = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Команда обучения.
+        /// </summary>
         public ICommand TrainCommand
         {
             get;
         }
-        public ObservableCollection<string> MarginTypes
-        {
-            get; set;
-        }
-        public ObservableCollection<string> LossFunctions
-        {
-            get; set;
-        }
 
+        /// <summary>
+        /// Создаёт новый экземпляр MySvmViewModel.
+        /// </summary>
         public MySvmViewModel()
         {
             _model = new MulticlassSvm3D();
             _config = new TrainingConfiguration();
-            _allPoints = new List<MulticlassPoint3D>();
+
+            _allPoints = new List<(double, double, double, int)>();
             _classNames = new Dictionary<int, string>();
 
             MarginTypes = new ObservableCollection<string> { "Soft Margin", "Hard Margin" };
@@ -176,73 +252,85 @@ namespace SVMKurs.ViewModels
             TrainCommand = new RelayCommand(_ => Train());
         }
 
-        public void SetData(List<MulticlassPoint3D> allPoints, Dictionary<int, string> classNames)
+        /// <summary>
+        /// Устанавливает данные и пересчитывает разбиение.
+        /// </summary>
+        public void SetData(List<Point3D> allPoints, Dictionary<int, string> classNames)
         {
-            _allPoints = allPoints;
+            _allPoints = allPoints.Select(p => (p.X, p.Y, p.Z, p.Label)).ToList();
             _classNames = classNames;
-            TotalCount = allPoints.Count;
-            UpdateCounts();
-            ApplySplit();
+
+            TotalCount = _allPoints.Count;
+            UpdateSplit();
         }
 
-        public MulticlassSvm3D GetModel()
-        {
-            return _model;
-        }
-
-        private void UpdateCounts()
-        {
-            TrainCount = (int)(TotalCount * _trainPercentage / 100.0);
-            TestCount = TotalCount - TrainCount;
-        }
-
-        private void ApplySplit()
+        /// <summary>
+        /// Пересчитывает train/test разбиение.
+        /// </summary>
+        private void UpdateSplit()
         {
             if (_allPoints.Count == 0)
             {
-                StatusMessage = "Нет данных для разделения";
+                TrainCount = 0;
+                TestCount = 0;
                 return;
             }
 
-            var random = new Random(42);
-            var shuffled = new List<MulticlassPoint3D>(_allPoints);
-            for (int i = 0; i < shuffled.Count; i++)
-            {
-                int r = random.Next(i, shuffled.Count);
-                (shuffled[r], shuffled[i]) = (shuffled[i], shuffled[r]);
-            }
+            TrainCount = (int)(TotalCount * TrainPercentage / 100.0);
+            TestCount = TotalCount - TrainCount;
+
+            var rnd = new Random(42);
+            var shuffled = _allPoints.OrderBy(_ => rnd.Next()).ToList();
 
             _trainPoints = shuffled.Take(TrainCount).ToList();
             _testPoints = shuffled.Skip(TrainCount).ToList();
 
-            StatusMessage = $"Разделение: обучение={_trainPoints.Count}, тест={_testPoints.Count}";
+            StatusMessage = $"Разделение: train={TrainCount}, test={TestCount}";
         }
 
+        /// <summary>
+        /// Обучает модель, считает метрики и строит ROC.
+        /// </summary>
         private void Train()
         {
-            if (_trainPoints == null || _trainPoints.Count == 0)
+            if (_trainPoints.Count == 0)
             {
-                StatusMessage = "Сначала примените разделение выборки!";
+                StatusMessage = "Нет данных для обучения.";
                 return;
             }
 
             try
             {
-                StatusMessage = "Обучение моего SVM...";
+                StatusMessage = "Обучение...";
+
+                var samples = _trainPoints
+                    .Select(p => new Point3D(p.x, p.y, p.z, p.label))
+                    .ToList();
 
                 _model = new MulticlassSvm3D();
-                _model.Train(_trainPoints, _classNames, _config.C);
+                _model.Train(samples, _config);
 
-                var metrics = MetricsCalculator.Calculate(_model, _testPoints, "MySVM");
+                var trueLabels = _testPoints.Select(p => p.label).ToArray();
+                var predictedLabels = _testPoints.Select(p => _model.Predict(p.x, p.y, p.z)).ToArray();
+                var predictedProb = _testPoints
+                    .Select(p => _model.PredictProba(p.x, p.y, p.z).Values.ToArray())
+                    .ToArray();
+
+                var metrics = MetricsCalculator.Calculate(
+                    trueLabels,
+                    predictedProb,
+                    predictedLabels,
+                    _classNames.Count);
 
                 Accuracy = metrics.Accuracy;
                 Precision = metrics.Precision;
                 Recall = metrics.Recall;
                 F1Score = metrics.F1Score;
-                _rocPoints = metrics.RocCurve;
+                MacroAuc = metrics.MacroAuc;
 
-                StatusMessage = $"Обучение завершено! Точность: {Accuracy:P1}";
-                RequestDrawRoc?.Invoke(_rocPoints);
+                UpdateRoc(metrics);
+
+                StatusMessage = $"Обучение завершено. Точность: {Accuracy:P1}";
                 TrainingCompleted?.Invoke();
             }
             catch (Exception ex)
@@ -251,10 +339,31 @@ namespace SVMKurs.ViewModels
             }
         }
 
-        public event PropertyChangedEventHandler PropertyChanged;
-        protected void OnPropertyChanged([CallerMemberName] string name = null)
+        /// <summary>
+        /// Обновляет ROC-кривую.
+        /// </summary>
+        private void UpdateRoc(Metrics m)
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+            var model = new PlotModel { Title = "ROC-кривая" };
+
+            model.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, Minimum = 0, Maximum = 1, Title = "FPR" });
+            model.Axes.Add(new LinearAxis { Position = AxisPosition.Left, Minimum = 0, Maximum = 1, Title = "TPR" });
+
+            var roc = new LineSeries { Color = OxyColors.Green, StrokeThickness = 2 };
+
+            foreach (var p in m.RocMacro)
+                roc.Points.Add(new DataPoint(p.fpr, p.tpr));
+
+            model.Series.Add(roc);
+            RocPlotModel = model;
         }
+
+        /// <summary>
+        /// Возвращает обученную модель.
+        /// </summary>
+        public MulticlassSvm3D GetModel() => _model;
+
+        protected void OnPropertyChanged([CallerMemberName] string name = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 }

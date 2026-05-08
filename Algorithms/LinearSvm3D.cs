@@ -1,211 +1,105 @@
-﻿using System;
-using System.Collections.Generic;
-
-namespace SVMKurs.Algorithms
+﻿namespace SVMKurs.Algorithms
 {
     /// <summary>
-    /// Ваш собственный Linear SVM для 3D пространства
-    /// Решающая функция: f(x,y,z) = w0*x + w1*y + w2*z + b
+    /// Линейный бинарный SVM-классификатор.
+    /// Использует линейное ядро K(x, x_i) = x · x_i.
+    /// Хранит опорные векторы, их альфы и смещение b.
     /// </summary>
     public class LinearSvm3D
     {
-        public double W0
-        {
-            get; private set;
-        }  // вес для X (компактность)
-        public double W1
-        {
-            get; private set;
-        }  // вес для Y (вытянутость)
-        public double W2
-        {
-            get; private set;
-        }  // вес для Z (угловатость)
+        /// <summary>
+        /// Опорные векторы (точки, для которых α_i > 0).
+        /// </summary>
+        public List<SupportVector3D> SupportVectors { get; private set; } = new();
+
+        /// <summary>
+        /// Смещение (bias).
+        /// </summary>
         public double Bias
         {
             get; private set;
-        } // смещение
-
-        public bool IsTrained
-        {
-            get; private set;
         }
-        public List<SupportVector3D> SupportVectors
+
+        /// <summary>
+        /// Признак того, что модель обучена.
+        /// </summary>
+        public bool IsTrained => SupportVectors.Count > 0;
+
+        /// <summary>
+        /// Весовой вектор w = Σ α_i y_i x_i.
+        /// </summary>
+        public (double wx, double wy, double wz) WeightVector
         {
             get; private set;
         }
 
         public LinearSvm3D()
         {
-            SupportVectors = new List<SupportVector3D>();
-            IsTrained = false;
         }
 
         /// <summary>
-        /// Решающая функция: f(x,y,z) = w0*x + w1*y + w2*z + b
+        /// Устанавливает модель после обучения SMO.
         /// </summary>
-        public double DecisionFunction(double x, double y, double z)
+        public void SetModel(List<SupportVector3D> sv, double bias)
         {
-            if (!IsTrained)
-                throw new InvalidOperationException("Модель не обучена");
-
-            return W0 * x + W1 * y + W2 * z + Bias;
-        }
-
-        /// <summary>
-        /// Классификация точки в 3D пространстве
-        /// </summary>
-        public ClassificationResult3D Predict(double x, double y, double z)
-        {
-            double decision = DecisionFunction(x, y, z);
-            int predictedClass = decision >= 0 ? 1 : -1;
-
-            // Уверенность через сигмоид (от 0.5 до 1.0)
-            double confidence = 1.0 / (1.0 + Math.Exp(-Math.Abs(decision)));
-
-            return new ClassificationResult3D
-            {
-                PredictedClass = predictedClass,
-                DecisionValue = decision,
-                Confidence = confidence
-            };
-        }
-
-        /// <summary>
-        /// Установка весов модели (вызывается после обучения)
-        /// </summary>
-        public void SetWeights(double w0, double w1, double w2, double bias)
-        {
-            W0 = w0;
-            W1 = w1;
-            W2 = w2;
+            SupportVectors = sv ?? throw new ArgumentNullException(nameof(sv));
             Bias = bias;
-            IsTrained = true;
-        }
 
-        /// <summary>
-        /// Добавление опорного вектора
-        /// </summary>
-        public void AddSupportVector(double x, double y, double z, int label)
-        {
-            SupportVectors.Add(new SupportVector3D
+            // Вычисляем весовой вектор
+            double wx = 0, wy = 0, wz = 0;
+
+            foreach (var s in SupportVectors)
             {
-                X = x,
-                Y = y,
-                Z = z,
-                Label = label
-            });
+                wx += s.Alpha * s.Label * s.X;
+                wy += s.Alpha * s.Label * s.Y;
+                wz += s.Alpha * s.Label * s.Z;
+            }
+
+            WeightVector = (wx, wy, wz);
         }
 
         /// <summary>
-        /// Сброс модели
+        /// Линейное ядро: скалярное произведение двух точек.
         /// </summary>
-        public void Reset()
+        private static double Kernel(double[] a, double[] b)
         {
-            W0 = 0;
-            W1 = 0;
-            W2 = 0;
-            Bias = 0;
-            IsTrained = false;
-            SupportVectors.Clear();
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         }
 
         /// <summary>
-        /// Получение уравнения разделяющей плоскости для визуализации
+        /// Вычисляет значение решающей функции f(x).
         /// </summary>
-        public string GetEquation()
+        public double Decision(double x, double y, double z)
         {
             if (!IsTrained)
-                return "Модель не обучена";
-            return $"f(x,y,z) = {W0:F3}·x + {W1:F3}·y + {W2:F3}·z + {Bias:F3} = 0";
+                throw new InvalidOperationException("Модель SVM не обучена.");
+
+            double sum = 0;
+            double[] point = { x, y, z };
+
+            foreach (var sv in SupportVectors)
+            {
+                double[] svPoint = sv.ToArray();
+                sum += sv.Alpha * sv.Label * Kernel(point, svPoint);
+            }
+
+            return sum + Bias;
         }
 
         /// <summary>
-        /// Расстояние от точки до разделяющей плоскости
+        /// Предсказывает метку класса (-1 или +1).
         /// </summary>
-        public double DistanceToPlane(double x, double y, double z)
+        public int Predict(double x, double y, double z)
         {
-            double norm = Math.Sqrt(W0 * W0 + W1 * W1 + W2 * W2);
-            if (norm < 1e-10)
-                return 0;
-            return Math.Abs(DecisionFunction(x, y, z)) / norm;
-        }
-    }
-
-    /// <summary>
-    /// Точка в 3D пространстве для обучения
-    /// </summary>
-    public class Point3D
-    {
-        public double X
-        {
-            get; set;
-        }  // компактность
-        public double Y
-        {
-            get; set;
-        }  // вытянутость
-        public double Z
-        {
-            get; set;
-        }  // угловатость
-        public int Label
-        {
-            get; set;
-        } // -1 или 1 для бинарной классификации
-
-        public Point3D(double x, double y, double z, int label)
-        {
-            X = x;
-            Y = y;
-            Z = z;
-            Label = label;
+            return Decision(x, y, z) >= 0 ? 1 : -1;
         }
 
-        public double[] ToArray() => new[] { X, Y, Z };
-    }
-
-    /// <summary>
-    /// Опорный вектор в 3D
-    /// </summary>
-    public class SupportVector3D
-    {
-        public double X
+        /// <summary>
+        /// Возвращает уверенность классификации (модуль decision value).
+        /// </summary>
+        public double Confidence(double x, double y, double z)
         {
-            get; set;
+            return Math.Abs(Decision(x, y, z));
         }
-        public double Y
-        {
-            get; set;
-        }
-        public double Z
-        {
-            get; set;
-        }
-        public int Label
-        {
-            get; set;
-        }
-    }
-
-    /// <summary>
-    /// Результат классификации
-    /// </summary>
-    public class ClassificationResult3D
-    {
-        public int PredictedClass
-        {
-            get; set;
-        }
-        public double DecisionValue
-        {
-            get; set;
-        }
-        public double Confidence
-        {
-            get; set;
-        }
-
-        public string PredictedClassName => PredictedClass == 1 ? "Класс A" : "Класс B";
     }
 }

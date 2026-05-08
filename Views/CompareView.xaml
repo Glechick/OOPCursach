@@ -9,6 +9,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- Блок загрузки изображения -->
         <Border Grid.Row="0" BorderBrush="#CCCCCC" BorderThickness="1" Background="#FAFAFA" Padding="15" Margin="0,0,0,10">
             <StackPanel HorizontalAlignment="Center">
                 <Button Content="Загрузить изображение" Command="{Binding LoadImageCommand}" 
@@ -17,25 +18,77 @@
             </StackPanel>
         </Border>
 
+        <!-- Две модели -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
+            <!-- Мой SVM -->
             <Border Grid.Column="0" BorderBrush="#27AE60" BorderThickness="2" Background="#F0FFF0" Margin="0,0,5,0" Padding="15">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+
                     <TextBlock Text="Мой SVM" FontWeight="Bold" FontSize="16" Foreground="#27AE60" Margin="0,0,0,15"/>
+
                     <TextBlock Text="{Binding MySvmResult}" FontSize="24" FontWeight="Bold" Margin="0,0,0,10"/>
                     <TextBlock Text="{Binding MySvmConfidence}" Foreground="Gray" FontSize="12"/>
+
+                    <TextBlock Text="Top‑3:" FontWeight="Bold" Margin="0,15,0,5"/>
+
+                    <StackPanel>
+                        <TextBlock FontWeight="Bold">
+                            <Run Text="{Binding MySvmTopK[0].ClassName, Mode=OneWay}"/>
+                            <Run Text=": "/>
+                            <Run Text="{Binding MySvmTopK[0].Probability, Mode=OneWay, StringFormat=P1}"/>
+                        </TextBlock>
+
+                        <TextBlock>
+                            <Run Text="{Binding MySvmTopK[1].ClassName, Mode=OneWay}"/>
+                            <Run Text=": "/>
+                            <Run Text="{Binding MySvmTopK[1].Probability, Mode=OneWay, StringFormat=P1}"/>
+                        </TextBlock>
+
+                        <TextBlock>
+                            <Run Text="{Binding MySvmTopK[2].ClassName, Mode=OneWay}"/>
+                            <Run Text=": "/>
+                            <Run Text="{Binding MySvmTopK[2].Probability, Mode=OneWay, StringFormat=P1}"/>
+                        </TextBlock>
+                    </StackPanel>
+
                 </StackPanel>
             </Border>
 
+            <!-- Accord SVM -->
             <Border Grid.Column="1" BorderBrush="#3498DB" BorderThickness="2" Background="#F0F8FF" Margin="5,0,0,0" Padding="15">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+
                     <TextBlock Text="Accord SVM" FontWeight="Bold" FontSize="16" Foreground="#3498DB" Margin="0,0,0,15"/>
+
                     <TextBlock Text="{Binding AccordSvmResult}" FontSize="24" FontWeight="Bold" Margin="0,0,0,10"/>
                     <TextBlock Text="{Binding AccordSvmConfidence}" Foreground="Gray" FontSize="12"/>
+
+                    <TextBlock Text="Top‑3:" FontWeight="Bold" Margin="0,15,0,5"/>
+
+                    <StackPanel>
+                        <TextBlock FontWeight="Bold">
+                            <Run Text="{Binding AccordTopK[0].ClassName, Mode=OneWay}"/>
+                            <Run Text="{Binding AccordTopK[0].Probability, Mode=OneWay, StringFormat=' {0:P1}'}"/>
+                        </TextBlock>
+
+                        <TextBlock>
+                            <Run Text="{Binding AccordTopK[1].ClassName, Mode=OneWay}"/>
+                            <Run Text=": "/>
+                            <Run Text="{Binding AccordTopK[1].Probability, Mode=OneWay, StringFormat=P1}"/>
+                        </TextBlock>
+
+                        <TextBlock>
+                            <Run Text="{Binding AccordTopK[2].ClassName, Mode=OneWay}"/>
+                            <Run Text=": "/>
+                            <Run Text="{Binding AccordTopK[2].Probability, Mode=OneWay, StringFormat=P1}"/>
+                        </TextBlock>
+                    </StackPanel>
+
                 </StackPanel>
             </Border>
         </Grid>

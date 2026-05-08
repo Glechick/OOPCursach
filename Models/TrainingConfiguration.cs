@@ -1,5 +1,6 @@
 ﻿namespace SVMKurs.Models
 {
+    [Serializable]
     public class TrainingConfiguration
     {
         public double C { get; set; } = 1.0;

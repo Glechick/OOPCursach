@@ -1,250 +1,180 @@
-﻿using System;
+﻿using SVMKurs.Models;
+using SVMKurs.Services;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace SVMKurs.Algorithms
 {
     /// <summary>
-    /// Мультиклассовый классификатор на основе 3D Linear SVM
-    /// Использует стратегию One-vs-One
+    /// Многоклассовый SVM-классификатор для трёхмерных данных.
+    /// Использует стратегию "один-против-одного".
     /// </summary>
-    public class MulticlassSvm3D
+    public class MulticlassSvm3D : IClassifierModel
     {
-        private List<LinearSvm3D> _binarySvms = new List<LinearSvm3D>();
-        private List<(int classA, int classB)> _classPairs = new List<(int, int)>();
-        private Dictionary<int, string> _classNames = new Dictionary<int, string>();
+        private readonly List<(int classA, int classB, LinearSvm3D svm)> _models =
+            new List<(int, int, LinearSvm3D)>();
 
-        public bool IsTrained
-        {
-            get; private set;
-        }
-        public int NumberOfClasses => _classNames.Count;
+        private List<int> _classes = new();
 
         /// <summary>
-        /// Обучение мультиклассового SVM
+        /// Признак того, что модель обучена.
         /// </summary>
-        /// <param name="samples">Точки с метками классов (0, 1, 2...)</param>
-        /// <param name="classNames">Имена классов (круг, квадрат...)</param>
-        /// <param name="C">Параметр регуляризации</param>
-        public void Train(List<MulticlassPoint3D> samples, Dictionary<int, string> classNames, double C = 1.0)
+        public bool IsTrained => _models.Count > 0;
+
+        /// <summary>
+        /// Обучает модель на наборе данных Point3D.
+        /// </summary>
+        public void Train(List<Point3D> data, TrainingConfiguration config)
         {
-            _classNames = classNames;
-            var uniqueClasses = classNames.Keys.OrderBy(k => k).ToList();
-            int numClasses = uniqueClasses.Count;
+            if (data == null || data.Count == 0)
+                throw new ArgumentException("Набор данных пуст.");
 
-            if (numClasses < 2)
-                throw new ArgumentException("Нужно минимум 2 класса для обучения");
+            _models.Clear();
 
-            _binarySvms.Clear();
-            _classPairs.Clear();
+            _classes = data.Select(d => d.Label)
+                           .Distinct()
+                           .OrderBy(v => v)
+                           .ToList();
 
-            // Обучаем SVM для каждой пары классов
-            for (int i = 0; i < numClasses; i++)
+            if (_classes.Count < 2)
+                throw new InvalidOperationException("Нужно минимум два класса.");
+
+            for (int i = 0; i < _classes.Count; i++)
             {
-                for (int j = i + 1; j < numClasses; j++)
+                for (int j = i + 1; j < _classes.Count; j++)
                 {
-                    int classA = uniqueClasses[i];
-                    int classB = uniqueClasses[j];
+                    int classA = _classes[i];
+                    int classB = _classes[j];
 
-                    // Берём только точки двух текущих классов
-                    var binaryPoints = samples
-                        .Where(p => p.Label == classA || p.Label == classB)
-                        .Select(p => new Point3D(p.X, p.Y, p.Z, p.Label == classA ? 1 : -1))
-                        .ToList();
+                    var subset = new List<Point3D>();
 
-                    if (binaryPoints.Count == 0)
+                    foreach (var p in data)
+                    {
+                        if (p.Label == classA)
+                            subset.Add(new Point3D(p.X, p.Y, p.Z, +1));
+                        else if (p.Label == classB)
+                            subset.Add(new Point3D(p.X, p.Y, p.Z, -1));
+                    }
+
+                    if (subset.Count < 2)
                         continue;
 
-                    // Обучаем бинарный SVM
-                    var svm = new LinearSvm3D();
-                    var trainer = new SvmTrainer3D(svm);
-                    trainer.Train(binaryPoints, C);
+                    var trainer = new SvmTrainer3D(config.C);
+                    var svm = trainer.Train(subset);
 
-                    _binarySvms.Add(svm);
-                    _classPairs.Add((classA, classB));
+                    _models.Add((classA, classB, svm));
                 }
             }
-
-            IsTrained = true;
         }
 
         /// <summary>
-        /// Классификация новой точки (голосование)
+        /// Предсказывает класс.
         /// </summary>
-        public MulticlassResult3D Predict(double x, double y, double z)
+        public int Predict(double x, double y, double z)
         {
             if (!IsTrained)
-                throw new InvalidOperationException("Модель не обучена");
+                throw new InvalidOperationException("Модель не обучена.");
 
-            // Голосование
-            int[] votes = new int[NumberOfClasses];
-            double[] confidenceScores = new double[NumberOfClasses];
-            double[] decisionValues = new double[NumberOfClasses];
+            var votes = new Dictionary<int, int>();
 
-            for (int k = 0; k < _binarySvms.Count; k++)
+            foreach (var (classA, classB, svm) in _models)
             {
-                var result = _binarySvms[k].Predict(x, y, z);
-                int winner = result.PredictedClass == 1 ? _classPairs[k].classA : _classPairs[k].classB;
+                int result = svm.Predict(x, y, z);
+                int winner = result == 1 ? classA : classB;
+
+                if (!votes.ContainsKey(winner))
+                    votes[winner] = 0;
+
                 votes[winner]++;
-                confidenceScores[winner] += result.Confidence;
-                decisionValues[winner] += result.DecisionValue;
             }
 
-            // Находим класс с максимальным количеством голосов
-            int predictedClass = Array.IndexOf(votes, votes.Max());
+            return votes.OrderByDescending(v => v.Value).First().Key;
+        }
 
-            // Усредняем уверенность
-            double avgConfidence = confidenceScores[predictedClass] / votes[predictedClass];
-            double avgDecision = decisionValues[predictedClass] / votes[predictedClass];
+        /// <summary>
+        /// Возвращает вероятности по классам.
+        /// </summary>
+        public Dictionary<int, double> PredictProba(double x, double y, double z)
+        {
+            if (!IsTrained)
+                throw new InvalidOperationException("Модель не обучена.");
 
-            return new MulticlassResult3D
+            var scores = _classes.ToDictionary(c => c, c => 0.0);
+
+            foreach (var (classA, classB, svm) in _models)
             {
-                PredictedClass = predictedClass,
-                PredictedClassName = _classNames[predictedClass],
-                Confidence = avgConfidence,
-                DecisionValue = avgDecision,
-                AllVotes = votes.ToList()
+                double d = svm.Decision(x, y, z);
+
+                double pA = 1.0 / (1.0 + Math.Exp(-d));
+                double pB = 1.0 - pA;
+
+                scores[classA] += pA;
+                scores[classB] += pB;
+            }
+
+            double max = scores.Values.Max();
+            var exp = scores.ToDictionary(k => k.Key, v => Math.Exp(v.Value - max));
+            double sum = exp.Values.Sum();
+
+            return exp.ToDictionary(k => k.Key, v => v.Value / sum);
+        }
+
+        /// <summary>
+        /// Возвращает вероятности в виде массива.
+        /// </summary>
+        public double[] PredictProbaArray(double x, double y, double z)
+        {
+            var dict = PredictProba(x, y, z);
+            return _classes.Select(c => dict[c]).ToArray();
+        }
+
+        /// <summary>
+        /// Преобразует модель в сериализуемую структуру.
+        /// </summary>
+        public SvmModelData ToData()
+        {
+            return new SvmModelData
+            {
+                Classes = _classes.ToList(),
+
+                Models = _models.Select(m => new SvmBinaryModelData
+                {
+                    ClassA = m.classA,
+                    ClassB = m.classB,
+                    Bias = m.svm.Bias,
+
+                    SupportVectors = m.svm.SupportVectors.Select(s => new SupportVectorData
+                    {
+                        X = s.X,
+                        Y = s.Y,
+                        Z = s.Z,
+                        Label = s.Label,
+                        Alpha = s.Alpha
+                    }).ToList()
+                }).ToList()
             };
         }
 
         /// <summary>
-        /// Получить все бинарные классификаторы (для анализа)
+        /// Восстанавливает модель из сериализуемой структуры.
         /// </summary>
-        public List<LinearSvm3D> GetBinaryClassifiers() => _binarySvms;
-
-        /// <summary>
-        /// Сброс модели
-        /// </summary>
-        public void Reset()
+        public void LoadFromData(SvmModelData data)
         {
-            _binarySvms.Clear();
-            _classPairs.Clear();
-            _classNames.Clear();
-            IsTrained = false;
-        }
+            _classes = data.Classes.ToList();
+            _models.Clear();
 
-        /// <summary>
-        /// Получить описание модели
-        /// </summary>
-        public string GetModelInfo()
-        {
-            if (!IsTrained)
-                return "Модель не обучена";
-
-            string info = $"Мультиклассовый SVM (One-vs-One)\n";
-            info += $"Классов: {NumberOfClasses}\n";
-            info += $"Бинарных классификаторов: {_binarySvms.Count}\n\n";
-
-            for (int i = 0; i < _binarySvms.Count; i++)
+            foreach (var m in data.Models)
             {
-                var (classA, classB) = _classPairs[i];
-                info += $"{_classNames[classA]} vs {_classNames[classB]}: {_binarySvms[i].GetEquation()}\n";
+                var sv = m.SupportVectors
+                .Select(s => new SupportVector3D(s.X, s.Y, s.Z, s.Label, s.Alpha))
+                .ToList();
+
+                var svm = new LinearSvm3D();
+                svm.SetModel(sv, m.Bias);
+
+                _models.Add((m.ClassA, m.ClassB, svm));
             }
-
-            return info;
-        }
-
-        /// <summary>
-        /// Оценка качества модели на тестовой выборке
-        /// </summary>
-        /// <returns>Точность (accuracy) от 0 до 1</returns>
-        public double Evaluate(List<MulticlassPoint3D> testSamples)
-        {
-            if (!IsTrained)
-                throw new InvalidOperationException("Модель не обучена");
-
-            int correct = 0;
-            foreach (var sample in testSamples)
-            {
-                var result = Predict(sample.X, sample.Y, sample.Z);
-                if (result.PredictedClass == sample.Label)
-                    correct++;
-            }
-
-            return (double)correct / testSamples.Count;
-        }
-
-        /// <summary>
-        /// Получение матрицы ошибок (confusion matrix)
-        /// </summary>
-        public int[,] GetConfusionMatrix(List<MulticlassPoint3D> testSamples)
-        {
-            if (!IsTrained)
-                throw new InvalidOperationException("Модель не обучена");
-
-            int n = NumberOfClasses;
-            int[,] matrix = new int[n, n];
-
-            foreach (var sample in testSamples)
-            {
-                var result = Predict(sample.X, sample.Y, sample.Z);
-                matrix[sample.Label, result.PredictedClass]++;
-            }
-
-            return matrix;
-        }
-    }
-
-    /// <summary>
-    /// Точка для мультиклассового обучения
-    /// </summary>
-    public class MulticlassPoint3D
-    {
-        public double X
-        {
-            get; set;
-        }
-        public double Y
-        {
-            get; set;
-        }
-        public double Z
-        {
-            get; set;
-        }
-        public int Label
-        {
-            get; set;
-        }  // 0, 1, 2... для разных классов
-
-        public MulticlassPoint3D(double x, double y, double z, int label)
-        {
-            X = x;
-            Y = y;
-            Z = z;
-            Label = label;
-        }
-    }
-
-    /// <summary>
-    /// Результат мультиклассовой классификации
-    /// </summary>
-    public class MulticlassResult3D
-    {
-        public int PredictedClass
-        {
-            get; set;
-        }
-        public string PredictedClassName
-        {
-            get; set;
-        }
-        public double Confidence
-        {
-            get; set;
-        }
-        public double DecisionValue
-        {
-            get; set;
-        }
-        public List<int> AllVotes
-        {
-            get; set;
-        }
-
-        public override string ToString()
-        {
-            return $"{PredictedClassName} (уверенность: {Confidence:P1}, голосов: {AllVotes?.Max() ?? 0})";
         }
     }
 }
