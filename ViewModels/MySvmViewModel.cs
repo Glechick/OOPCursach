@@ -4,8 +4,6 @@ using OxyPlot.Axes;
 using SVMKurs.Algorithms;
 using SVMKurs.Models;
 using SVMKurs.Services;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -47,19 +45,6 @@ namespace SVMKurs.ViewModels
 
         public event Action TrainingCompleted;
         public event PropertyChangedEventHandler PropertyChanged;
-
-        /// <summary>
-        /// Конфигурация обучения SVM.
-        /// </summary>
-        public TrainingConfiguration Config
-        {
-            get => _config;
-            set
-            {
-                _config = value;
-                OnPropertyChanged();
-            }
-        }
 
         /// <summary>
         /// Процент обучающей выборки.
@@ -121,19 +106,24 @@ namespace SVMKurs.ViewModels
         }
 
         /// <summary>
-        /// Список типов Margin.
-        /// </summary>
-        public ObservableCollection<string> MarginTypes
-        {
-            get; set;
-        }
-
-        /// <summary>
         /// Список функций потерь.
         /// </summary>
         public ObservableCollection<string> LossFunctions
         {
             get; set;
+        }
+
+        /// <summary>
+        /// Конфигурация обучения.
+        /// </summary>
+        public TrainingConfiguration Config
+        {
+            get => _config;
+            set
+            {
+                _config = value;
+                OnPropertyChanged();
+            }
         }
 
         /// <summary>
@@ -228,6 +218,11 @@ namespace SVMKurs.ViewModels
         }
 
         /// <summary>
+        /// Признак того, что модель обучена
+        /// </summary>
+        public bool IsTrained => _model != null && _model.IsTrained;
+
+        /// <summary>
         /// Команда обучения.
         /// </summary>
         public ICommand TrainCommand
@@ -246,7 +241,6 @@ namespace SVMKurs.ViewModels
             _allPoints = new List<(double, double, double, int)>();
             _classNames = new Dictionary<int, string>();
 
-            MarginTypes = new ObservableCollection<string> { "Soft Margin", "Hard Margin" };
             LossFunctions = new ObservableCollection<string> { "Hinge", "SquaredHinge" };
 
             TrainCommand = new RelayCommand(_ => Train());
@@ -273,6 +267,8 @@ namespace SVMKurs.ViewModels
             {
                 TrainCount = 0;
                 TestCount = 0;
+                _trainPoints = new List<(double, double, double, int)>();
+                _testPoints = new List<(double, double, double, int)>();
                 return;
             }
 
@@ -293,9 +289,9 @@ namespace SVMKurs.ViewModels
         /// </summary>
         private void Train()
         {
-            if (_trainPoints.Count == 0)
+            if (_trainPoints == null || _trainPoints.Count == 0)
             {
-                StatusMessage = "Нет данных для обучения.";
+                StatusMessage = "Нет данных для обучения. Сначала загрузите изображения.";
                 return;
             }
 
@@ -359,9 +355,64 @@ namespace SVMKurs.ViewModels
         }
 
         /// <summary>
+        /// Оценивает загруженную модель на тестовых данных без переобучения
+        /// </summary>
+        public void Evaluate()
+        {
+            if (_model == null || !_model.IsTrained)
+            {
+                StatusMessage = "Нет обученной модели для оценки";
+                return;
+            }
+
+            if (_testPoints == null || _testPoints.Count == 0)
+            {
+                StatusMessage = "Нет тестовых данных для оценки";
+                return;
+            }
+
+            try
+            {
+                StatusMessage = "Оценка модели на тестовых данных...";
+
+                var trueLabels = _testPoints.Select(p => p.label).ToArray();
+                var predictedLabels = _testPoints.Select(p => _model.Predict(p.x, p.y, p.z)).ToArray();
+                var predictedProb = _testPoints
+                    .Select(p => _model.PredictProba(p.x, p.y, p.z).Values.ToArray())
+                    .ToArray();
+
+                var metrics = MetricsCalculator.Calculate(
+                    trueLabels,
+                    predictedProb,
+                    predictedLabels,
+                    _classNames.Count);
+
+                Accuracy = metrics.Accuracy;
+                Precision = metrics.Precision;
+                Recall = metrics.Recall;
+                F1Score = metrics.F1Score;
+                MacroAuc = metrics.MacroAuc;
+                UpdateRoc(metrics);
+
+                StatusMessage = $"Оценка завершена. Точность: {Accuracy:P1}";
+                TrainingCompleted?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Ошибка оценки: {ex.Message}";
+            }
+        }
+
+        /// <summary>
         /// Возвращает обученную модель.
         /// </summary>
         public MulticlassSvm3D GetModel() => _model;
+
+        public void SetModel(MulticlassSvm3D model)
+        {
+            _model = model;
+            OnPropertyChanged(nameof(IsTrained));
+        }
 
         protected void OnPropertyChanged([CallerMemberName] string name = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

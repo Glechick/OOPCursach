@@ -26,7 +26,7 @@
         public bool IsTrained => SupportVectors.Count > 0;
 
         /// <summary>
-        /// Весовой вектор w = Σ α_i y_i x_i.
+        /// Весовой вектор w = sum α_i y_i x_i.
         /// </summary>
         public (double wx, double wy, double wz) WeightVector
         {
@@ -92,14 +92,6 @@
         public int Predict(double x, double y, double z)
         {
             return Decision(x, y, z) >= 0 ? 1 : -1;
-        }
-
-        /// <summary>
-        /// Возвращает уверенность классификации (модуль decision value).
-        /// </summary>
-        public double Confidence(double x, double y, double z)
-        {
-            return Math.Abs(Decision(x, y, z));
         }
     }
 }

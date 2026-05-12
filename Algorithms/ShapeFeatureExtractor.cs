@@ -316,20 +316,19 @@ namespace SVMKurs.Algorithms
         }
 
         /// <summary>
-        /// Вычисляет угловатость фигуры на основе среднего угла между сегментами.
-        /// Круг → 0, квадрат → ~0.5, треугольник → ~0.8, звезда → 1.
+        /// Вычисляет угловатость фигуры (0 - гладкая, 1 - очень угловатая)
         /// </summary>
         private double CalcAngularity(List<Point> contour)
         {
             if (contour.Count < 5)
                 return 0;
 
-            // Упрощаем контур до 40 точек для стабильности
-            var pts = Simplify(contour, 40);
+            var pts = Simplify(contour, 60);
             int n = pts.Count;
 
-            double totalSharpness = 0;
-            int count = 0;
+            // Считаем количество "острых" углов (меньше 90 градусов)
+            int sharpCorners = 0;
+            double totalAngleDeviation = 0;
 
             for (int i = 0; i < n; i++)
             {
@@ -343,7 +342,6 @@ namespace SVMKurs.Algorithms
                 double v2x = p2.X - p1.X;
                 double v2y = p2.Y - p1.Y;
 
-                // Нормы
                 double len1 = Math.Sqrt(v1x * v1x + v1y * v1y);
                 double len2 = Math.Sqrt(v2x * v2x + v2y * v2y);
                 if (len1 < 1 || len2 < 1)
@@ -352,26 +350,24 @@ namespace SVMKurs.Algorithms
                 // Косинус угла
                 double cos = (v1x * v2x + v1y * v2y) / (len1 * len2);
                 cos = Math.Max(-1, Math.Min(1, cos));
+                double angle = Math.Acos(cos) * 180 / Math.PI; // в градусах
 
-                // Сам угол
-                double angle = Math.Acos(cos); // 0..π
-
-                // Преобразуем угол в "остроту"
-                // острый угол → 1, тупой → 0
-                double sharpness = 1.0 - (angle / Math.PI);
-
-                totalSharpness += sharpness;
-                count++;
+                // Угол меньше 120 градусов считается "угловатым"
+                if (angle < 120)
+                {
+                    sharpCorners++;
+                    // Чем острее угол, тем больше вклад
+                    totalAngleDeviation += (120 - angle) / 120;
+                }
             }
 
-            if (count == 0)
+            if (sharpCorners == 0)
                 return 0;
 
-            // Средняя угловатость
-            double angularity = totalSharpness / count;
+            // Нормируем результат
+            double angularity = Math.Min(1, totalAngleDeviation / (sharpCorners * 0.5));
 
-            // Нормируем в диапазон 0..1
-            return Math.Max(0, Math.Min(1, angularity));
+            return angularity;
         }
 
 

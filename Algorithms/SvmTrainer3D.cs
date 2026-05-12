@@ -1,46 +1,44 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-
-namespace SVMKurs.Algorithms
+﻿namespace SVMKurs.Algorithms
 {
     /// <summary>
-    /// Обучение линейного SVM методом SMO.
-    /// Работает только с метками -1 и +1.
+    /// Обучает линейный SVM методом SMO (Sequential Minimal Optimization).
     /// </summary>
     public class SvmTrainer3D
     {
-        private readonly double C;          // Параметр регуляризации
-        private readonly double Tolerance;  // Допуск для условий KKT
-        private readonly double Epsilon;    // Минимальное изменение альфы
+        private readonly double C;
+        private readonly double Tolerance;
+        private readonly string LossFunction;
 
-        public SvmTrainer3D(double c = 1.0, double tolerance = 1e-3, double epsilon = 1e-3)
+
+        /// <summary>
+        /// Конструктор трейнера SVM.
+        /// </summary>
+        /// <param name="c">Параметр регуляризации.</param>
+        /// <param name="tolerance">Точность сходимости.</param>
+        /// <param name="lossFunction">Функция потерь: Hinge или SquaredHinge.</param>
+        public SvmTrainer3D(double c = 1.0, double tolerance = 1e-3, string lossFunction = "Hinge")
         {
             C = c;
             Tolerance = tolerance;
-            Epsilon = epsilon;
+            LossFunction = lossFunction;
         }
 
         /// <summary>
-        /// Обучает линейный SVM и возвращает готовую модель.
+        /// Обучает линейный SVM и возвращает модель.
         /// </summary>
+        /// <param name="points">Список точек с метками -1 или +1.</param>
+        /// <returns>Обученная модель LinearSvm3D.</returns>
         public LinearSvm3D Train(List<Point3D> points)
         {
             if (points == null || points.Count == 0)
                 throw new ArgumentException("Набор данных пуст.");
 
             int n = points.Count;
-
-            // Альфы
             double[] alpha = new double[n];
-
-            // Смещение
             double b = 0;
-
-            // Ошибки E_i = f(x_i) - y_i
             double[] errors = new double[n];
 
-            // Предварительно вычисляем скалярные произведения (линейное ядро)
+            // Предварительно вычисляем скалярные произведения
             double[,] kernel = new double[n, n];
             for (int i = 0; i < n; i++)
             {
@@ -52,30 +50,31 @@ namespace SVMKurs.Algorithms
                 }
             }
 
+            // Инициализируем ошибки
+            for (int i = 0; i < n; i++)
+                errors[i] = -points[i].Label;
+
             bool changed;
             int passes = 0;
-            int maxPasses = 10;
+            int maxPasses = 500;
 
-            // Основной цикл SMO
             do
             {
                 changed = false;
 
                 for (int i = 0; i < n; i++)
                 {
-                    double Ei = ComputeError(i);
+                    double Ei = ComputeError(i, alpha, b, points, kernel);
+                    errors[i] = Ei;
 
-                    // Проверка условий KKT
-                    bool violatesKKT =
-                        (points[i].Label * Ei < -Tolerance && alpha[i] < C) ||
-                        (points[i].Label * Ei > Tolerance && alpha[i] > 0);
+                    bool violatesKKT = (points[i].Label * Ei < -Tolerance && alpha[i] < C) ||
+                                      (points[i].Label * Ei > Tolerance && alpha[i] > 0);
 
                     if (!violatesKKT)
                         continue;
 
-                    // Выбираем j != i
-                    int j = SelectSecondIndex(i, n);
-                    double Ej = ComputeError(j);
+                    int j = SelectSecondIndex(i, errors, n);
+                    double Ej = ComputeError(j, alpha, b, points, kernel);
 
                     double alpha_i_old = alpha[i];
                     double alpha_j_old = alpha[j];
@@ -83,7 +82,6 @@ namespace SVMKurs.Algorithms
                     int yi = points[i].Label;
                     int yj = points[j].Label;
 
-                    // Вычисляем границы L и H
                     double L, H;
                     if (yi != yj)
                     {
@@ -96,37 +94,40 @@ namespace SVMKurs.Algorithms
                         H = Math.Min(C, alpha[i] + alpha[j]);
                     }
 
-                    if (Math.Abs(L - H) < 1e-12)
+                    if (Math.Abs(L - H) < 1e-10)
                         continue;
 
-                    // Вычисляем η
                     double eta = 2 * kernel[i, j] - kernel[i, i] - kernel[j, j];
                     if (eta >= 0)
                         continue;
 
-                    // Обновляем α_j
-                    alpha[j] -= yj * (Ei - Ej) / eta;
+                    double step;
+                    if (LossFunction == "SquaredHinge")
+                    {
+                        step = yj * (Ei - Ej) / (eta + 1.0 / C);
+                    }
+                    else
+                    {
+                        step = yj * (Ei - Ej) / eta;
+                    }
 
-                    // Ограничиваем α_j
+                    alpha[j] = alpha_j_old - step;
+
                     if (alpha[j] > H)
                         alpha[j] = H;
                     else if (alpha[j] < L)
                         alpha[j] = L;
 
-                    if (Math.Abs(alpha[j] - alpha_j_old) < Epsilon)
+                    if (Math.Abs(alpha[j] - alpha_j_old) < 1e-12)
                         continue;
 
-                    // Обновляем α_i
-                    alpha[i] += yi * yj * (alpha_j_old - alpha[j]);
+                    alpha[i] = alpha_i_old + yi * yj * (alpha_j_old - alpha[j]);
 
-                    // Обновляем bias
-                    double b1 = b - Ei
-                        - yi * (alpha[i] - alpha_i_old) * kernel[i, i]
-                        - yj * (alpha[j] - alpha_j_old) * kernel[i, j];
+                    double b1 = b - Ei - yi * (alpha[i] - alpha_i_old) * kernel[i, i]
+                                    - yj * (alpha[j] - alpha_j_old) * kernel[i, j];
 
-                    double b2 = b - Ej
-                        - yi * (alpha[i] - alpha_i_old) * kernel[i, j]
-                        - yj * (alpha[j] - alpha_j_old) * kernel[j, j];
+                    double b2 = b - Ej - yi * (alpha[i] - alpha_i_old) * kernel[i, j]
+                                    - yj * (alpha[j] - alpha_j_old) * kernel[j, j];
 
                     if (alpha[i] > 0 && alpha[i] < C)
                         b = b1;
@@ -135,6 +136,11 @@ namespace SVMKurs.Algorithms
                     else
                         b = (b1 + b2) / 2.0;
 
+                    for (int k = 0; k < n; k++)
+                    {
+                        errors[k] = ComputeError(k, alpha, b, points, kernel);
+                    }
+
                     changed = true;
                 }
 
@@ -142,7 +148,6 @@ namespace SVMKurs.Algorithms
 
             } while (passes < maxPasses);
 
-            // Формируем список опорных векторов
             var sv = new List<SupportVector3D>();
             for (int i = 0; i < n; i++)
             {
@@ -153,32 +158,46 @@ namespace SVMKurs.Algorithms
                 }
             }
 
-            // Создаём модель
             var model = new LinearSvm3D();
             model.SetModel(sv, b);
-
             return model;
+        }
 
-            // Локальные функции
+        private double ComputeError(int idx, double[] alpha, double b, List<Point3D> points, double[,] kernel)
+        {
+            double sum = 0;
+            for (int k = 0; k < points.Count; k++)
+                sum += alpha[k] * points[k].Label * kernel[k, idx];
+            return sum + b - points[idx].Label;
+        }
 
-            double ComputeError(int idx)
+        private int SelectSecondIndex(int i, double[] errors, int total)
+        {
+            double maxDiff = -1;
+            int j = -1;
+
+            for (int k = 0; k < total; k++)
             {
-                double sum = 0;
-                for (int k = 0; k < n; k++)
-                    sum += alpha[k] * points[k].Label * kernel[k, idx];
-                return sum + b - points[idx].Label;
+                if (k == i)
+                    continue;
+                double diff = Math.Abs(errors[i] - errors[k]);
+                if (diff > maxDiff)
+                {
+                    maxDiff = diff;
+                    j = k;
+                }
             }
 
-            int SelectSecondIndex(int i, int total)
+            if (j == -1)
             {
                 Random rnd = new Random();
-                int j;
                 do
                 {
                     j = rnd.Next(total);
                 } while (j == i);
-                return j;
             }
+
+            return j;
         }
     }
 }

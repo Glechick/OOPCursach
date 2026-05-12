@@ -1,9 +1,10 @@
 ﻿using SVMKurs.Algorithms;
+using SVMKurs.Services;
+using System.ComponentModel;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 
 namespace SVMKurs.ViewModels
 {
@@ -59,6 +60,11 @@ namespace SVMKurs.ViewModels
             MySvmViewModel.TrainingCompleted += OnTrainingCompleted;
             AccordSvmViewModel.TrainingCompleted += OnTrainingCompleted;
 
+            DataManagementViewModel.MyModelLoaded += OnMyModelLoaded;
+            DataManagementViewModel.AccordModelLoaded += OnAccordModelLoaded;
+
+            AccordSvmViewModel.TrainingCompleted += OnTrainingCompleted;
+
             OnDataChanged();
             GlobalStatus = "Готов к работе";
         }
@@ -71,18 +77,11 @@ namespace SVMKurs.ViewModels
         {
             var allPoints = new List<Point3D>();
             var classNames = new Dictionary<int, string>();
-            CompareViewModel.SetClassNames(classNames);
-
-            CompareViewModel.SetModels(
-                DataManagementViewModel.GetMyModel(),
-                null // Accord не трогать
-            );
 
             int classId = 0;
             foreach (var shapeClass in DataManagementViewModel.ShapeClasses)
             {
                 classNames[classId] = shapeClass.Name;
-
                 foreach (var image in shapeClass.Images)
                 {
                     allPoints.Add(new Point3D(
@@ -91,13 +90,17 @@ namespace SVMKurs.ViewModels
                         image.Feature3,
                         classId));
                 }
-
                 classId++;
             }
 
-            // Передаём данные в модели
             MySvmViewModel.SetData(allPoints, classNames);
             AccordSvmViewModel.SetData(allPoints);
+
+            CompareViewModel.SetClassNames(classNames);
+            CompareViewModel.SetModels(
+                DataManagementViewModel.GetMyModel(),    
+                DataManagementViewModel.GetAccordModel()
+            );
 
             GlobalStatus = $"Данные обновлены: {allPoints.Count} изображений, {classNames.Count} классов";
         }
@@ -108,8 +111,9 @@ namespace SVMKurs.ViewModels
         /// </summary>
         private void OnTrainingCompleted()
         {
-            // Передаём обученную пользовательскую модель в DataManagementViewModel
             DataManagementViewModel.SetMyModel(MySvmViewModel.GetModel());
+            DataManagementViewModel.SetAccordModel(AccordSvmViewModel.GetAccordModel());
+
 
             // Передаём обе модели в CompareViewModel
             CompareViewModel.SetModels(
@@ -117,6 +121,26 @@ namespace SVMKurs.ViewModels
                 AccordSvmViewModel.GetAccordModel());
 
             GlobalStatus = "Модели обновлены после обучения";
+        }
+
+        private void OnMyModelLoaded(MulticlassSvm3D model)
+        {
+            MySvmViewModel.SetModel(model);
+
+            MySvmViewModel.Evaluate();
+
+            GlobalStatus = "Загруженная модель синхронизирована и оценена";
+        }
+
+        private void OnAccordModelLoaded(AccordSvmWrapper model)
+        {
+            // Передаём модель в AccordSvmViewModel
+            AccordSvmViewModel.SetModel(model);
+
+            // Оцениваем модель на текущих тестовых данных
+            AccordSvmViewModel.Evaluate();
+
+            GlobalStatus = "Загруженная Accord модель синхронизирована и оценена";
         }
 
         public event PropertyChangedEventHandler PropertyChanged;

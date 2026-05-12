@@ -39,20 +39,17 @@
                     <StackPanel>
                         <TextBlock FontWeight="Bold">
                             <Run Text="{Binding MySvmTopK[0].ClassName, Mode=OneWay}"/>
-                            <Run Text=": "/>
-                            <Run Text="{Binding MySvmTopK[0].Probability, Mode=OneWay, StringFormat=P1}"/>
+                            <Run Text="{Binding MySvmTopK[0].Probability, Mode=OneWay, StringFormat=' {0:P1}'}"/>
                         </TextBlock>
 
                         <TextBlock>
                             <Run Text="{Binding MySvmTopK[1].ClassName, Mode=OneWay}"/>
-                            <Run Text=": "/>
-                            <Run Text="{Binding MySvmTopK[1].Probability, Mode=OneWay, StringFormat=P1}"/>
+                            <Run Text="{Binding MySvmTopK[1].Probability, Mode=OneWay, StringFormat=' {0:P1}'}"/>
                         </TextBlock>
 
                         <TextBlock>
                             <Run Text="{Binding MySvmTopK[2].ClassName, Mode=OneWay}"/>
-                            <Run Text=": "/>
-                            <Run Text="{Binding MySvmTopK[2].Probability, Mode=OneWay, StringFormat=P1}"/>
+                            <Run Text="{Binding MySvmTopK[2].Probability, Mode=OneWay, StringFormat=' {0:P1}'}"/>
                         </TextBlock>
                     </StackPanel>
 
@@ -78,14 +75,12 @@
 
                         <TextBlock>
                             <Run Text="{Binding AccordTopK[1].ClassName, Mode=OneWay}"/>
-                            <Run Text=": "/>
-                            <Run Text="{Binding AccordTopK[1].Probability, Mode=OneWay, StringFormat=P1}"/>
+                            <Run Text="{Binding AccordTopK[1].Probability, Mode=OneWay, StringFormat=' {0:P1}'}"/>
                         </TextBlock>
 
                         <TextBlock>
                             <Run Text="{Binding AccordTopK[2].ClassName, Mode=OneWay}"/>
-                            <Run Text=": "/>
-                            <Run Text="{Binding AccordTopK[2].Probability, Mode=OneWay, StringFormat=P1}"/>
+                            <Run Text="{Binding AccordTopK[2].Probability, Mode=OneWay, StringFormat=' {0:P1}'}"/>
                         </TextBlock>
                     </StackPanel>
 

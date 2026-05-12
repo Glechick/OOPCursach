@@ -7,6 +7,8 @@ namespace SVMKurs.Services
     /// </summary>
     public class SvmModelData
     {
+        internal Dictionary<string, string> Metadata;
+
         public List<int> Classes
         {
             get; set;

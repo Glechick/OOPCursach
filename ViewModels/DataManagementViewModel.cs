@@ -23,8 +23,13 @@ namespace SVMKurs.ViewModels
     /// </summary>
     public class DataManagementViewModel : INotifyPropertyChanged
     {
+        public event Action ModelsUpdated;
+
         private readonly ShapeFeatureExtractor _extractor;
         private readonly JsonStorageService _storage;
+
+        public event Action<MulticlassSvm3D> MyModelLoaded;
+        public event Action<AccordSvmWrapper> AccordModelLoaded;
 
         private ObservableCollection<ShapeClass> _shapeClasses;
         private ShapeClass _selectedClass;
@@ -40,6 +45,11 @@ namespace SVMKurs.ViewModels
         /// Accord‑модель (реализация IClassifierModel).
         /// </summary>
         private IClassifierModel _accordModel;
+
+        /// <summary>
+        /// Возвращает Accord модель.
+        /// </summary>
+        public IClassifierModel GetAccordModel() => _accordModel;
 
         /// <summary>
         /// Событие, вызываемое при изменении данных (классы/изображения).
@@ -60,7 +70,6 @@ namespace SVMKurs.ViewModels
         }
 
         public IClassifierModel GetMyModel() => _mySvmModel;
-
 
         /// <summary>
         /// Текущий выбранный класс.
@@ -358,14 +367,17 @@ namespace SVMKurs.ViewModels
 
                 var data = _storage.LoadData();
                 ShapeClasses.Clear();
+
+                int newId = 0;
                 foreach (var kvp in data)
                 {
                     var shapeClass = new ShapeClass
                     {
                         Name = kvp.Key,
-                        Id = ShapeClasses.Count,
+                        Id = newId,
                         Images = new ObservableCollection<ShapeImage>()
                     };
+
                     foreach (var stored in kvp.Value)
                     {
                         shapeClass.Images.Add(new ShapeImage
@@ -377,7 +389,9 @@ namespace SVMKurs.ViewModels
                         });
                     }
                     ShapeClasses.Add(shapeClass);
+                    newId++;
                 }
+
                 StatusMessage = $"✅ Загружено {ShapeClasses.Count} классов из JSON";
                 DataChanged?.Invoke();
             }
@@ -453,21 +467,29 @@ namespace SVMKurs.ViewModels
                 {
                     if (_accordModel == null || !_accordModel.IsTrained)
                     {
-                        StatusMessage = "⚠️ Модель Accord Нельзя сохранить.";
+                        StatusMessage = "⚠️ Модель Accord не обучена.";
                         return;
                     }
 
                     var wrapper = _accordModel as AccordSvmWrapper;
+                    if (wrapper == null)
+                    {
+                        StatusMessage = "❌ Неверный тип модели Accord";
+                        return;
+                    }
 
-                    var raw = wrapper.GetRawModel();
+                    using (var stream = new FileStream(dialog.FileName, FileMode.Create))
+                    {
+                        Accord.IO.Serializer.Save(wrapper.GetRawModel(), stream);
+                    }
 
-                    Serializer.Save(raw, dialog.FileName);
-
-                    StatusMessage = $"✅ Модель (Accord) сохранена: {dialog.FileName}";
+                    StatusMessage = $"✅ Модель Accord сохранена: {Path.GetFileName(dialog.FileName)}";
+                    MessageBox.Show("Модель Accord сохранена!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 catch (Exception ex)
                 {
                     StatusMessage = $"❌ Ошибка сохранения Accord: {ex.Message}";
+                    MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
         }
@@ -490,17 +512,28 @@ namespace SVMKurs.ViewModels
                     var json = File.ReadAllText(dialog.FileName);
                     var data = System.Text.Json.JsonSerializer.Deserialize<SvmModelData>(json);
 
+                    if (data == null || data.Models == null || data.Models.Count == 0)
+                    {
+                        StatusMessage = "❌ Неверный формат файла модели";
+                        return;
+                    }
+
                     var model = new MulticlassSvm3D();
                     model.LoadFromData(data);
 
                     _mySvmModel = model;
 
-                    StatusMessage = $"✅ Моя модель загружена: {dialog.FileName}";
+                    MyModelLoaded?.Invoke(model);
+
+                    StatusMessage = $"✅ Моя модель загружена: {Path.GetFileName(dialog.FileName)}";
+                    MessageBox.Show($"Модель загружена!\nКлассов: {data.Classes.Count}", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
+
                     DataChanged?.Invoke();
                 }
                 catch (Exception ex)
                 {
                     StatusMessage = $"❌ Ошибка загрузки: {ex.Message}";
+                    MessageBox.Show($"Ошибка загрузки:\n{ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
         }
@@ -514,23 +547,30 @@ namespace SVMKurs.ViewModels
             var dialog = new OpenFileDialog
             {
                 Filter = "Accord Model (*.accord)|*.accord",
-                Title = "Загрузить модель (Accord)"
+                Title = "Загрузить модель Accord"
             };
 
             if (dialog.ShowDialog() == true)
             {
                 try
                 {
-                    var raw = Serializer.Load<MulticlassSupportVectorMachine<Linear>>(dialog.FileName);
                     var wrapper = new AccordSvmWrapper();
-                    wrapper.SetRawModel(raw);
-                    _accordModel = wrapper;
+                    using (var stream = new FileStream(dialog.FileName, FileMode.Open))
+                    {
+                        var raw = Accord.IO.Serializer.Load<Accord.MachineLearning.VectorMachines.MulticlassSupportVectorMachine<Accord.Statistics.Kernels.Linear>>(stream);
+                        wrapper.SetRawModel(raw);
+                        _accordModel = wrapper;
+                    }
 
-                    StatusMessage = $"✅ Модель (Accord) загружена: {dialog.FileName}";
+                    StatusMessage = $"✅ Модель Accord загружена: {Path.GetFileName(dialog.FileName)}";
+                    AccordModelLoaded?.Invoke(wrapper);
+                    MessageBox.Show("Модель Accord загружена!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
+                    DataChanged?.Invoke();
                 }
                 catch (Exception ex)
                 {
                     StatusMessage = $"❌ Ошибка загрузки Accord: {ex.Message}";
+                    MessageBox.Show($"Ошибка: {ex.Message}\n\nВозможно, файл поврежден или несовместимой версии.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
         }

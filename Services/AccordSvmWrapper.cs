@@ -1,4 +1,5 @@
-﻿using Accord.MachineLearning.VectorMachines;
+﻿using Accord.IO;
+using Accord.MachineLearning.VectorMachines;
 using Accord.MachineLearning.VectorMachines.Learning;
 using Accord.Statistics.Kernels;
 using SVMKurs.Algorithms;
@@ -9,63 +10,42 @@ using System.Linq;
 
 namespace SVMKurs.Services
 {
-    /// <summary>
-    /// Обёртка над Accord.NET для обучения и использования
-    /// многоклассовой SVM с линейным ядром.
-    /// Реализует единый интерфейс IClassifierModel, чтобы
-    /// CompareViewModel мог работать с любой моделью одинаково.
-    /// </summary>
     public class AccordSvmWrapper : IClassifierModel
     {
-        /// <summary>
-        /// Внутренняя Accord‑модель SVM.
-        /// </summary>
         private MulticlassSupportVectorMachine<Linear> _svm;
 
-        /// <summary>
-        /// Признак того, что модель обучена и готова к использованию.
-        /// </summary>
         public bool IsTrained
         {
             get; private set;
         }
 
-        /// <summary>
-        /// Конструктор по умолчанию (используется при загрузке модели).
-        /// </summary>
         public AccordSvmWrapper()
         {
+            IsTrained = false;
         }
 
-        /// <summary>
-        /// Конструктор, принимающий уже готовую Accord‑модель.
-        /// Используется при загрузке модели из файла.
-        /// </summary>
         public AccordSvmWrapper(MulticlassSupportVectorMachine<Linear> model)
         {
             _svm = model;
-            IsTrained = model != null;
+            IsTrained = model != null && model.NumberOfClasses > 0;
         }
 
-        /// <summary>
-        /// Обучает Accord SVM по списку трёхмерных точек.
-        /// </summary>
         public void Train(List<Point3D> samples, TrainingConfiguration config)
         {
             if (samples == null || samples.Count == 0)
-                throw new ArgumentException("Список обучающих данных пуст.");
+                throw new ArgumentException("Обучающие данные отсутствуют.");
 
             double[][] inputs = samples
-                .Select(s => new double[] { s.X, s.Y, s.Z })
+                .Select(p => new[] { p.X, p.Y, p.Z })
                 .ToArray();
 
             int[] outputs = samples
-                .Select(s => s.Label)
+                .Select(p => p.Label)
                 .ToArray();
 
             var teacher = new MulticlassSupportVectorLearning<Linear>()
             {
-                Learner = (p) => new LinearDualCoordinateDescent()
+                Learner = (param) => new LinearDualCoordinateDescent()
                 {
                     Complexity = config.C,
                     Tolerance = config.Tolerance
@@ -73,33 +53,25 @@ namespace SVMKurs.Services
             };
 
             _svm = teacher.Learn(inputs, outputs);
-            IsTrained = true;
+            IsTrained = _svm != null && _svm.NumberOfClasses > 0;
         }
 
-        /// <summary>
-        /// Предсказывает класс по трём признакам.
-        /// </summary>
         public int Predict(double x, double y, double z)
         {
             if (!IsTrained || _svm == null)
                 throw new InvalidOperationException("Модель Accord не обучена.");
 
-            return _svm.Decide(new double[] { x, y, z });
+            return _svm.Decide(new[] { x, y, z });
         }
 
-        /// <summary>
-        /// Возвращает вероятности принадлежности к каждому классу.
-        /// Реализовано через softmax по значениям decision function.
-        /// </summary>
         public Dictionary<int, double> PredictProba(double x, double y, double z)
         {
             if (!IsTrained || _svm == null)
                 throw new InvalidOperationException("Модель Accord не обучена.");
 
-            double[] scores = _svm.Scores(new double[] { x, y, z });
-
+            double[] scores = _svm.Scores(new[] { x, y, z });
             double max = scores.Max();
-            double[] exp = scores.Select(s => Math.Exp(s - max)).ToArray();
+            double[] exp = scores.Select(v => Math.Exp(v - max)).ToArray();
             double sum = exp.Sum();
 
             var result = new Dictionary<int, double>();
@@ -109,18 +81,67 @@ namespace SVMKurs.Services
             return result;
         }
 
-        /// <summary>
-        /// Возвращает внутреннюю Accord‑модель для сохранения.
-        /// </summary>
+        public double[] PredictProbaArray(double x, double y, double z)
+        {
+            if (!IsTrained || _svm == null)
+                throw new InvalidOperationException("Модель Accord не обучена.");
+
+            var probs = PredictProba(x, y, z);
+            int classCount = _svm.NumberOfClasses;
+            var result = new double[classCount];
+
+            for (int i = 0; i < classCount; i++)
+                result[i] = probs.ContainsKey(i) ? probs[i] : 0;
+
+            return result;
+        }
+
+        public void SaveToFile(string filePath)
+        {
+            if (!IsTrained || _svm == null)
+                throw new InvalidOperationException("Модель не обучена");
+
+            Serializer.Save(_svm, filePath);
+        }
+
+        public static AccordSvmWrapper LoadFromFile(string filePath)
+        {
+            var model = Serializer.Load<MulticlassSupportVectorMachine<Linear>>(filePath);
+            if (model == null)
+                throw new Exception("Не удалось загрузить Accord модель.");
+
+            return new AccordSvmWrapper(model);
+        }
+
         public MulticlassSupportVectorMachine<Linear> GetRawModel() => _svm;
 
-        /// <summary>
-        /// Устанавливает внутреннюю Accord‑модель (после загрузки из файла).
-        /// </summary>
         public void SetRawModel(MulticlassSupportVectorMachine<Linear> model)
         {
             _svm = model;
-            IsTrained = model != null;
+            IsTrained = model != null && model.NumberOfClasses > 0;
+        }
+
+        public SvmModelData ToData()
+        {
+            if (!IsTrained || _svm == null)
+                throw new InvalidOperationException("Модель не обучена");
+
+            return new SvmModelData
+            {
+                Classes = Enumerable.Range(0, _svm.NumberOfClasses).ToList(),
+                Models = new List<SvmBinaryModelData>(),
+                Metadata = new Dictionary<string, string>
+                {
+                    ["Framework"] = "Accord.NET",
+                    ["Kernel"] = "Linear",
+                    ["Classes"] = _svm.NumberOfClasses.ToString()
+                }
+            };
+        }
+
+        public void LoadFromData(SvmModelData data)
+        {
+            throw new NotSupportedException("Accord использует бинарную сериализацию.");
         }
     }
 }

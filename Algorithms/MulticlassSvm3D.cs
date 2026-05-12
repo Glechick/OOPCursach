@@ -8,7 +8,7 @@ namespace SVMKurs.Algorithms
 {
     /// <summary>
     /// Многоклассовый SVM-классификатор для трёхмерных данных.
-    /// Использует стратегию "один-против-одного".
+    /// Использует стратегию "один-против-одного" и сигмоиду для вероятностей.
     /// </summary>
     public class MulticlassSvm3D : IClassifierModel
     {
@@ -60,7 +60,7 @@ namespace SVMKurs.Algorithms
                     if (subset.Count < 2)
                         continue;
 
-                    var trainer = new SvmTrainer3D(config.C);
+                    var trainer = new SvmTrainer3D(config.C, config.Tolerance, config.LossFunction);
                     var svm = trainer.Train(subset);
 
                     _models.Add((classA, classB, svm));
@@ -93,7 +93,7 @@ namespace SVMKurs.Algorithms
         }
 
         /// <summary>
-        /// Возвращает вероятности по классам.
+        /// Возвращает вероятности по классам через сигмоиду.
         /// </summary>
         public Dictionary<int, double> PredictProba(double x, double y, double z)
         {
@@ -104,20 +104,18 @@ namespace SVMKurs.Algorithms
 
             foreach (var (classA, classB, svm) in _models)
             {
-                double d = svm.Decision(x, y, z);
-
-                double pA = 1.0 / (1.0 + Math.Exp(-d));
+                double decision = svm.Decision(x, y, z);
+                double pA = 1.0 / (1.0 + Math.Exp(-decision * 3));
                 double pB = 1.0 - pA;
 
                 scores[classA] += pA;
                 scores[classB] += pB;
             }
 
-            double max = scores.Values.Max();
-            var exp = scores.ToDictionary(k => k.Key, v => Math.Exp(v.Value - max));
-            double sum = exp.Values.Sum();
+            double sum = scores.Values.Sum();
+            var result = scores.ToDictionary(k => k.Key, v => v.Value / sum);
 
-            return exp.ToDictionary(k => k.Key, v => v.Value / sum);
+            return result;
         }
 
         /// <summary>
@@ -137,13 +135,11 @@ namespace SVMKurs.Algorithms
             return new SvmModelData
             {
                 Classes = _classes.ToList(),
-
                 Models = _models.Select(m => new SvmBinaryModelData
                 {
                     ClassA = m.classA,
                     ClassB = m.classB,
                     Bias = m.svm.Bias,
-
                     SupportVectors = m.svm.SupportVectors.Select(s => new SupportVectorData
                     {
                         X = s.X,
@@ -167,12 +163,11 @@ namespace SVMKurs.Algorithms
             foreach (var m in data.Models)
             {
                 var sv = m.SupportVectors
-                .Select(s => new SupportVector3D(s.X, s.Y, s.Z, s.Label, s.Alpha))
-                .ToList();
+                    .Select(s => new SupportVector3D(s.X, s.Y, s.Z, s.Label, s.Alpha))
+                    .ToList();
 
                 var svm = new LinearSvm3D();
                 svm.SetModel(sv, m.Bias);
-
                 _models.Add((m.ClassA, m.ClassB, svm));
             }
         }
